@@ -219,3 +219,210 @@ func (z *Z80) executeBlockInstruction(y, z_val uint8) int {
 		case 2: return z.indr()
 		case 3: return z.otdr()
 		}
+	}
+	return 8
+}
+
+// Block transfer instructions
+
+func (z *Z80) ldi() int {
+	val := z.Memory.Read(z.HL())
+	z.Memory.Write(z.DE(), val)
+	z.SetHL(z.HL() + 1)
+	z.SetDE(z.DE() + 1)
+	z.SetBC(z.BC() - 1)
+	
+	z.setFlag(FlagH, false)
+	z.setFlag(FlagPV, z.BC() != 0)
+	z.setFlag(FlagN, false)
+	// X and Y flags are complex for block instructions
+	n := val + z.A
+	z.F = (z.F & (FlagS | FlagZ | FlagC)) | (n & FlagX) | ((n << 4) & FlagY)
+	return 16
+}
+
+func (z *Z80) ldd() int {
+	val := z.Memory.Read(z.HL())
+	z.Memory.Write(z.DE(), val)
+	z.SetHL(z.HL() - 1)
+	z.SetDE(z.DE() - 1)
+	z.SetBC(z.BC() - 1)
+	
+	z.setFlag(FlagH, false)
+	z.setFlag(FlagPV, z.BC() != 0)
+	z.setFlag(FlagN, false)
+	n := val + z.A
+	z.F = (z.F & (FlagS | FlagZ | FlagC)) | (n & FlagX) | ((n << 4) & FlagY)
+	return 16
+}
+
+func (z *Z80) ldir() int {
+	z.ldi()
+	if z.BC() != 0 {
+		z.PC -= 2 // Repeat instruction
+		z.WZ = z.PC + 1
+		return 21
+	}
+	return 16
+}
+
+func (z *Z80) lddr() int {
+	z.ldd()
+	if z.BC() != 0 {
+		z.PC -= 2 // Repeat instruction
+		z.WZ = z.PC + 1
+		return 21
+	}
+	return 16
+}
+
+// Block search instructions
+
+func (z *Z80) cpi() int {
+	val := z.Memory.Read(z.HL())
+	result := int16(z.A) - int16(val)
+	z.SetHL(z.HL() + 1)
+	z.SetBC(z.BC() - 1)
+	
+	z.setFlag(FlagS, uint8(result)&0x80 != 0)
+	z.setFlag(FlagZ, uint8(result) == 0)
+	z.setFlag(FlagH, (int8(z.A&0x0F) - int8(val&0x0F)) < 0)
+	z.setFlag(FlagPV, z.BC() != 0)
+	z.setFlag(FlagN, true)
+	
+	n := uint8(result)
+	if z.getFlag(FlagH) {
+		n--
+	}
+	z.F = (z.F & 0xC1) | (n & FlagX) | ((n << 4) & FlagY)
+	z.WZ++
+	return 16
+}
+
+func (z *Z80) cpd() int {
+	val := z.Memory.Read(z.HL())
+	result := int16(z.A) - int16(val)
+	z.SetHL(z.HL() - 1)
+	z.SetBC(z.BC() - 1)
+	
+	z.setFlag(FlagS, uint8(result)&0x80 != 0)
+	z.setFlag(FlagZ, uint8(result) == 0)
+	z.setFlag(FlagH, (int8(z.A&0x0F) - int8(val&0x0F)) < 0)
+	z.setFlag(FlagPV, z.BC() != 0)
+	z.setFlag(FlagN, true)
+	
+	n := uint8(result)
+	if z.getFlag(FlagH) {
+		n--
+	}
+	z.F = (z.F & 0xC1) | (n & FlagX) | ((n << 4) & FlagY)
+	z.WZ--
+	return 16
+}
+
+func (z *Z80) cpir() int {
+	z.cpi()
+	if z.BC() != 0 && !z.getFlag(FlagZ) {
+		z.PC -= 2 // Repeat instruction
+		z.WZ = z.PC + 1
+		return 21
+	}
+	return 16
+}
+
+func (z *Z80) cpdr() int {
+	z.cpd()
+	if z.BC() != 0 && !z.getFlag(FlagZ) {
+		z.PC -= 2 // Repeat instruction
+		z.WZ = z.PC + 1
+		return 21
+	}
+	return 16
+}
+
+// Block I/O instructions
+
+func (z *Z80) ini() int {
+	val := z.IO.In(z.BC())
+	z.Memory.Write(z.HL(), val)
+	z.SetHL(z.HL() + 1)
+	z.B--
+	
+	z.setFlag(FlagZ, z.B == 0)
+	z.setFlag(FlagN, true)
+	// Other flags are complex for I/O block instructions
+	z.WZ = z.BC() + 1
+	return 16
+}
+
+func (z *Z80) ind() int {
+	val := z.IO.In(z.BC())
+	z.Memory.Write(z.HL(), val)
+	z.SetHL(z.HL() - 1)
+	z.B--
+	
+	z.setFlag(FlagZ, z.B == 0)
+	z.setFlag(FlagN, true)
+	z.WZ = z.BC() - 1
+	return 16
+}
+
+func (z *Z80) inir() int {
+	z.ini()
+	if z.B != 0 {
+		z.PC -= 2 // Repeat instruction
+		return 21
+	}
+	return 16
+}
+
+func (z *Z80) indr() int {
+	z.ind()
+	if z.B != 0 {
+		z.PC -= 2 // Repeat instruction
+		return 21
+	}
+	return 16
+}
+
+func (z *Z80) outi() int {
+	val := z.Memory.Read(z.HL())
+	z.B--
+	z.IO.Out(z.BC(), val)
+	z.SetHL(z.HL() + 1)
+	
+	z.setFlag(FlagZ, z.B == 0)
+	z.setFlag(FlagN, true)
+	z.WZ = z.BC() + 1
+	return 16
+}
+
+func (z *Z80) outd() int {
+	val := z.Memory.Read(z.HL())
+	z.B--
+	z.IO.Out(z.BC(), val)
+	z.SetHL(z.HL() - 1)
+	
+	z.setFlag(FlagZ, z.B == 0)
+	z.setFlag(FlagN, true)
+	z.WZ = z.BC() - 1
+	return 16
+}
+
+func (z *Z80) otir() int {
+	z.outi()
+	if z.B != 0 {
+		z.PC -= 2 // Repeat instruction
+		return 21
+	}
+	return 16
+}
+
+func (z *Z80) otdr() int {
+	z.outd()
+	if z.B != 0 {
+		z.PC -= 2 // Repeat instruction
+		return 21
+	}
+	return 16
+}
