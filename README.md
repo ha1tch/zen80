@@ -1,4 +1,5 @@
-# Z80 Emulator in Go
+# zen80
+#### is a Z80 Emulator written in Go
 
 A simple instruction-stepped Z80 CPU emulator written in Go, inspired by the cycle-accurate emulation techniques described in floooh's blog posts.
 
