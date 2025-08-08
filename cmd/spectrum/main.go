@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/yourusername/z80emu/system"
+	"github.com/ha1tch/zen80/system"
 )
 
 func main() {

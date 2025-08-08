@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/yourusername/z80emu/io"
-	"github.com/yourusername/z80emu/memory"
-	"github.com/yourusername/z80emu/z80"
+	"github.com/ha1tch/zen80/io"
+	"github.com/ha1tch/zen80/memory"
+	"github.com/ha1tch/zen80/z80"
 )
 
 // Spectrum represents a ZX Spectrum system

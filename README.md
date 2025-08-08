@@ -19,7 +19,7 @@ A simple instruction-stepped Z80 CPU emulator written in Go, inspired by the cyc
 ## Project Structure
 
 ```
-z80emu/
+zen80/
 ├── z80/
 │   ├── z80.go           # Core CPU state and main loop
 │   ├── decode.go        # Instruction decoder
@@ -44,9 +44,9 @@ z80emu/
 package main
 
 import (
-    "github.com/yourusername/z80emu/z80"
-    "github.com/yourusername/z80emu/memory"
-    "github.com/yourusername/z80emu/io"
+    "github.com/ha1tch/zen80/z80"
+    "github.com/ha1tch/zen80/memory"
+    "github.com/ha1tch/zen80/io"
 )
 
 func main() {
