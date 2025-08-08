@@ -44,15 +44,16 @@ func (z *Z80) executeCB() int {
 			*z.getRegister8(z_val) = val
 		}
 		
-	case 1: // BIT y,r
+			case 1: // BIT y,r
 		z.bit(val, y)
 		if z_val == 6 {
 			cycles = 12 // BIT n,(HL) is faster than other (HL) ops
-			// For BIT n,(HL), X and Y flags come from WZ high byte
-			z.F = (z.F & 0xC1) | (uint8(z.WZ>>8) & (FlagX | FlagY))
+			// For BIT n,(HL), X and Y flags come from high byte of address
+			// The high byte is already in H register
+			z.setFlag(FlagX, z.H&FlagX != 0)
+			z.setFlag(FlagY, z.H&FlagY != 0)
 		}
-		
-	case 2: // RES y,r
+		case 2: // RES y,r
 		val &^= (1 << y)
 		if z_val == 6 {
 			z.Memory.Write(addr, val)
@@ -88,5 +89,6 @@ func (z *Z80) bit(val uint8, bit uint8) {
 	// PV flag is set to same as Z flag for BIT
 	z.setFlag(FlagPV, result == 0)
 	// X and Y flags copy bits 3 and 5 of the value
-	z.F = (z.F & 0xC1) | (val & (FlagX | FlagY))
+	z.setFlag(FlagX, val&FlagX != 0)
+	z.setFlag(FlagY, val&FlagY != 0)
 }

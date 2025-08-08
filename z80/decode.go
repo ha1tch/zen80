@@ -55,7 +55,7 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 				cpu.WZ = cpu.PC
 				return 12
 			}
-			cpu.fetchByte() // Skip displacement
+			cpu.fetchByte() // Skip displacement if not taken
 			return 7
 		}
 
@@ -176,20 +176,48 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 		// Assorted operations on accumulator/flags
 		switch y {
 		case 0: // RLCA
-			cpu.A = cpu.rlc8(cpu.A)
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			carry := cpu.A >> 7
+			cpu.A = (cpu.A << 1) | carry
+			cpu.setFlag(FlagC, carry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 1: // RRCA
-			cpu.A = cpu.rrc8(cpu.A)
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			carry := cpu.A & 1
+			cpu.A = (cpu.A >> 1) | (carry << 7)
+			cpu.setFlag(FlagC, carry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 2: // RLA
-			cpu.A = cpu.rl8(cpu.A)
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			oldCarry := uint8(0)
+			if cpu.getFlag(FlagC) {
+				oldCarry = 1
+			}
+			newCarry := cpu.A >> 7
+			cpu.A = (cpu.A << 1) | oldCarry
+			cpu.setFlag(FlagC, newCarry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 3: // RRA
-			cpu.A = cpu.rr8(cpu.A)
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			oldCarry := uint8(0)
+			if cpu.getFlag(FlagC) {
+				oldCarry = 0x80
+			}
+			newCarry := cpu.A & 1
+			cpu.A = (cpu.A >> 1) | oldCarry
+			cpu.setFlag(FlagC, newCarry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 4: // DAA
 			cpu.daa()
@@ -198,19 +226,23 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 			cpu.A = ^cpu.A
 			cpu.setFlag(FlagN, true)
 			cpu.setFlag(FlagH, true)
-			cpu.F = (cpu.F & (FlagS | FlagZ | FlagPV | FlagC)) | FlagN | FlagH | (cpu.A & (FlagX | FlagY))
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 6: // SCF
 			cpu.setFlag(FlagC, true)
 			cpu.setFlag(FlagN, false)
 			cpu.setFlag(FlagH, false)
-			cpu.F = (cpu.F & (FlagS | FlagZ | FlagPV)) | FlagC | (cpu.A & (FlagX | FlagY))
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 7: // CCF
-			cpu.setFlag(FlagH, cpu.getFlag(FlagC))
-			cpu.setFlag(FlagC, !cpu.getFlag(FlagC))
+			oldCarry := cpu.getFlag(FlagC)
+			cpu.setFlag(FlagC, !oldCarry)
+			cpu.setFlag(FlagH, oldCarry)
 			cpu.setFlag(FlagN, false)
-			cpu.F = (cpu.F & (FlagS | FlagZ | FlagPV | FlagC)) | (cpu.A & (FlagX | FlagY))
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		}
 	}

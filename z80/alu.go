@@ -16,7 +16,8 @@ func (z *Z80) add8(val uint8) {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, result > 0xFF)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // adc8 performs 8-bit addition with carry
@@ -37,7 +38,8 @@ func (z *Z80) adc8(val uint8) {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, result > 0xFF)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // sub8 performs 8-bit subtraction
@@ -54,7 +56,8 @@ func (z *Z80) sub8(val uint8) {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, true)
 	z.setFlag(FlagC, result < 0)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // sbc8 performs 8-bit subtraction with carry
@@ -75,7 +78,8 @@ func (z *Z80) sbc8(val uint8) {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, true)
 	z.setFlag(FlagC, result < 0)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // and8 performs bitwise AND
@@ -88,7 +92,8 @@ func (z *Z80) and8(val uint8) {
 	z.setFlag(FlagPV, parity(z.A))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, false)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // xor8 performs bitwise XOR
@@ -101,7 +106,8 @@ func (z *Z80) xor8(val uint8) {
 	z.setFlag(FlagPV, parity(z.A))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, false)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // or8 performs bitwise OR
@@ -114,7 +120,8 @@ func (z *Z80) or8(val uint8) {
 	z.setFlag(FlagPV, parity(z.A))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, false)
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // cp8 performs comparison (A - val without storing result)
@@ -129,7 +136,8 @@ func (z *Z80) cp8(val uint8) {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, true)
 	z.setFlag(FlagC, result < 0)
-	z.F = (z.F & 0xC1) | (val & (FlagX | FlagY))
+	z.setFlag(FlagX, val&FlagX != 0)
+	z.setFlag(FlagY, val&FlagY != 0)
 }
 
 // inc8 performs 8-bit increment
@@ -138,13 +146,16 @@ func (z *Z80) inc8(val uint8) uint8 {
 	halfCarry := (val&0x0F + 1) > 0x0F
 	overflow := val == 0x7F
 	
+	// Preserve carry flag, update all others
+	oldCarry := z.getFlag(FlagC)
 	z.setFlag(FlagS, result&0x80 != 0)
 	z.setFlag(FlagZ, result == 0)
 	z.setFlag(FlagH, halfCarry)
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, false)
-	// C flag is not affected
-	z.F = (z.F & FlagC) | (result & (FlagX | FlagY))
+	z.setFlag(FlagC, oldCarry)  // Restore carry
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -161,7 +172,8 @@ func (z *Z80) dec8(val uint8) uint8 {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, true)
 	// C flag is not affected
-	z.F = (z.F & FlagC) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -176,7 +188,8 @@ func (z *Z80) add16(val1, val2 uint16) uint16 {
 	z.setFlag(FlagC, result > 0xFFFF)
 	
 	res16 := uint16(result)
-	z.F = (z.F & (FlagS | FlagZ | FlagPV)) | (uint8(res16>>8) & (FlagX | FlagY))
+	z.setFlag(FlagX, uint8(res16>>8)&FlagX != 0)
+	z.setFlag(FlagY, uint8(res16>>8)&FlagY != 0)
 	z.WZ = val1 + 1
 	
 	return res16
@@ -200,7 +213,8 @@ func (z *Z80) adc16(val1, val2 uint16) uint16 {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, result > 0xFFFF)
-	z.F = (z.F & 0xC1) | (uint8(res16>>8) & (FlagX | FlagY))
+	z.setFlag(FlagX, uint8(res16>>8)&FlagX != 0)
+	z.setFlag(FlagY, uint8(res16>>8)&FlagY != 0)
 	z.WZ = val1 + 1
 	
 	return res16
@@ -224,7 +238,8 @@ func (z *Z80) sbc16(val1, val2 uint16) uint16 {
 	z.setFlag(FlagPV, overflow)
 	z.setFlag(FlagN, true)
 	z.setFlag(FlagC, result < 0)
-	z.F = (z.F & 0xC1) | (uint8(res16>>8) & (FlagX | FlagY))
+	z.setFlag(FlagX, uint8(res16>>8)&FlagX != 0)
+	z.setFlag(FlagY, uint8(res16>>8)&FlagY != 0)
 	z.WZ = val1 + 1
 	
 	return res16
@@ -242,7 +257,8 @@ func (z *Z80) rlc8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x80 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -257,7 +273,8 @@ func (z *Z80) rrc8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x01 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -276,7 +293,8 @@ func (z *Z80) rl8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x80 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -295,7 +313,8 @@ func (z *Z80) rr8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x01 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -310,7 +329,8 @@ func (z *Z80) sla8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x80 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -325,7 +345,8 @@ func (z *Z80) sra8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x01 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -340,7 +361,8 @@ func (z *Z80) sll8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x80 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -355,7 +377,8 @@ func (z *Z80) srl8(val uint8) uint8 {
 	z.setFlag(FlagPV, parity(result))
 	z.setFlag(FlagN, false)
 	z.setFlag(FlagC, val&0x01 != 0)
-	z.F = (z.F & 0xC1) | (result & (FlagX | FlagY))
+	z.setFlag(FlagX, result&FlagX != 0)
+	z.setFlag(FlagY, result&FlagY != 0)
 	
 	return result
 }
@@ -363,28 +386,37 @@ func (z *Z80) srl8(val uint8) uint8 {
 // daa performs decimal adjust after addition
 func (z *Z80) daa() {
 	temp := z.A
-	correction := uint8(0)
-	carry := z.getFlag(FlagC)
-	
-	if z.getFlag(FlagH) || (z.A&0x0F) > 9 {
-		correction |= 0x06
-	}
-	if carry || z.A > 0x99 {
-		correction |= 0x60
-	}
+	diff := uint8(0)
+	carryOut := z.getFlag(FlagC)
 	
 	if z.getFlag(FlagN) {
-		z.A -= correction
+		// After subtraction
+		if z.getFlag(FlagH) {
+			diff = 0x06
+		}
+		if z.getFlag(FlagC) {
+			diff |= 0x60
+		}
+		z.A -= diff
 	} else {
-		z.A += correction
+		// After addition
+		if z.getFlag(FlagH) || (temp&0x0F) > 9 {
+			diff = 0x06
+		}
+		if z.getFlag(FlagC) || temp > 0x99 {
+			diff |= 0x60
+			carryOut = true
+		}
+		z.A += diff
 	}
 	
 	z.setFlag(FlagS, z.A&0x80 != 0)
 	z.setFlag(FlagZ, z.A == 0)
-	z.setFlag(FlagH, ((temp^correction^z.A)&0x10) != 0)
+	z.setFlag(FlagH, false) // H is always cleared after DAA
 	z.setFlag(FlagPV, parity(z.A))
-	z.setFlag(FlagC, carry || (correction&0x60 != 0))
-	z.F = (z.F & 0xC1) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagC, carryOut)
+	z.setFlag(FlagX, z.A&FlagX != 0)
+	z.setFlag(FlagY, z.A&FlagY != 0)
 }
 
 // Helper function to calculate parity
