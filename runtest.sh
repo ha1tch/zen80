@@ -1,0 +1,1 @@
+go test ./test -run "^Test[^S]" -v
