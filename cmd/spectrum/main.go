@@ -40,14 +40,17 @@ func main() {
 	go func() {
 		startTime := time.Now()
 		frameCount := 0
+		startCycles := spec.CPU.Cycles
 		
 		for time.Since(startTime) < time.Second {
 			spec.RunFrame()
 			frameCount++
 		}
 		
+		endCycles := spec.CPU.Cycles
 		done <- true
 		fmt.Printf("Frames executed in 1 second: %d (target: 50)\n", frameCount)
+		fmt.Printf("CPU cycles executed: %d (expected: ~3,500,000)\n", endCycles - startCycles)
 	}()
 	
 	// Wait for completion
@@ -61,6 +64,7 @@ func main() {
 	fmt.Printf("Accuracy: %.2f%%\n", (stats.ActualHz/stats.TargetHz)*100)
 	fmt.Printf("Frame rate: %.2f FPS (target: 50)\n", stats.FrameRate)
 	fmt.Printf("Total cycles: %d\n", stats.TotalCycles)
+	fmt.Printf("CPU Cycles counter: %d\n", spec.CPU.Cycles)
 	
 	// Test different speed multipliers
 	fmt.Println("\n=== Speed Multiplier Test ===")
@@ -87,6 +91,7 @@ func main() {
 		fmt.Printf("  Expected time: %.2f seconds\n", expectedTime)
 		fmt.Printf("  Actual time: %.2f seconds\n", elapsed.Seconds())
 		fmt.Printf("  Cycles executed: %d\n", cyclesExecuted)
+		fmt.Printf("  CPU cycles counter: %d\n", spec.CPU.Cycles)
 		fmt.Printf("  Effective frequency: %.0f Hz\n", 
 			float64(cyclesExecuted)/elapsed.Seconds())
 	}
@@ -161,12 +166,12 @@ func testInstructionTiming(spec *system.Spectrum) {
 		// Load test code at address 0x8000
 		spec.Reset()
 		spec.LoadSnapshot(0x8000, test.code)
-		spec.cpu.PC = 0x8000
+		spec.CPU.PC = 0x8000
 		
 		// Execute until HALT
 		totalCycles := 0
-		for !spec.cpu.Halted && totalCycles < 1000 {
-			cycles := spec.cpu.Step()
+		for !spec.CPU.Halted && totalCycles < 1000 {
+			cycles := spec.CPU.Step()
 			totalCycles += cycles
 		}
 		

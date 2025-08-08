@@ -3,7 +3,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/ha1tch/zen80/io"
 	"github.com/ha1tch/zen80/memory"
@@ -37,14 +36,14 @@ func runSimpleAddition() {
 	program := []uint8{
 		0x3E, 0x05, // LD A, 5
 		0x06, 0x03, // LD B, 3
-		0x80,       // ADD A, B
-		0x76,       // HALT
+		0x80, // ADD A, B
+		0x76, // HALT
 	}
 	mem.Load(0x0000, program)
 
 	// Create and run CPU
 	cpu := z80.New(mem, io)
-	
+
 	cycles := 0
 	for !cpu.Halted && cycles < 1000 {
 		c := cpu.Step()
@@ -62,18 +61,18 @@ func runLoopExample() {
 
 	// Program: Count from 10 down to 0
 	program := []uint8{
-		0x06, 0x0A,       // LD B, 10
-		0x3E, 0x00,       // LD A, 0
+		0x06, 0x0A, // LD B, 10
+		0x3E, 0x00, // LD A, 0
 		// Loop:
-		0x3C,             // INC A       (addr 0x04)
-		0x10, 0xFD,       // DJNZ -3     (loop back to 0x04)
-		0x76,             // HALT
+		0x3C,       // INC A       (addr 0x04)
+		0x10, 0xFD, // DJNZ -3     (loop back to 0x04)
+		0x76, // HALT
 	}
 	mem.Load(0x0000, program)
 
 	// Create and run CPU
 	cpu := z80.New(mem, io)
-	
+
 	cycles := 0
 	for !cpu.Halted && cycles < 10000 {
 		c := cpu.Step()
@@ -99,15 +98,15 @@ func runStackExample() {
 		0xD5,             // PUSH DE
 		0x01, 0x00, 0x00, // LD BC, 0x0000
 		0x11, 0x00, 0x00, // LD DE, 0x0000
-		0xD1,             // POP DE
-		0xC1,             // POP BC
-		0x76,             // HALT
+		0xD1, // POP DE
+		0xC1, // POP BC
+		0x76, // HALT
 	}
 	mem.Load(0x0000, program)
 
 	// Create and run CPU
 	cpu := z80.New(mem, io)
-	
+
 	cycles := 0
 	for !cpu.Halted && cycles < 1000 {
 		c := cpu.Step()
@@ -127,7 +126,7 @@ func runIOExample() {
 
 	// Set up I/O handlers
 	outputBuffer := []uint8{}
-	
+
 	// Port 0x00: Output port (console)
 	mappedIO.RegisterWriteHandler(0x00, func(port uint16, value uint8) {
 		outputBuffer = append(outputBuffer, value)
@@ -145,19 +144,19 @@ func runIOExample() {
 
 	// Program: Read from port and write to another port
 	program := []uint8{
-		0xDB, 0x01,       // IN A, (0x01)
-		0xD3, 0x00,       // OUT (0x00), A
-		0xDB, 0x01,       // IN A, (0x01)
-		0xD3, 0x00,       // OUT (0x00), A
-		0xDB, 0x01,       // IN A, (0x01)
-		0xD3, 0x00,       // OUT (0x00), A
-		0x76,             // HALT
+		0xDB, 0x01, // IN A, (0x01)
+		0xD3, 0x00, // OUT (0x00), A
+		0xDB, 0x01, // IN A, (0x01)
+		0xD3, 0x00, // OUT (0x00), A
+		0xDB, 0x01, // IN A, (0x01)
+		0xD3, 0x00, // OUT (0x00), A
+		0x76, // HALT
 	}
 	mem.Load(0x0000, program)
 
 	// Create and run CPU
 	cpu := z80.New(mem, mappedIO)
-	
+
 	cycles := 0
 	for !cpu.Halted && cycles < 1000 {
 		c := cpu.Step()

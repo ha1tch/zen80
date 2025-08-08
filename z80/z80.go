@@ -84,7 +84,8 @@ func New(memory MemoryInterface, io IOInterface) *Z80 {
 		IO:     io,
 		SP:     0xFFFF,
 		PC:     0x0000,
-		AF:     0xFFFF,
+		A:      0xFF,
+		F:      0xFF,
 	}
 }
 
@@ -99,6 +100,7 @@ func (z *Z80) Reset() {
 	z.Halted = false
 	z.pendingEI = false
 	z.pendingDI = false
+	// Don't reset Cycles - keep the total count
 }
 
 // Step executes one instruction and returns the number of cycles taken.

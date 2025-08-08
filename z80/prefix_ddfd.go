@@ -21,8 +21,6 @@ func (z *Z80) executeDD() int {
 	x := opcode >> 6
 	y := (opcode >> 3) & 7
 	z_val := opcode & 7
-	p := y >> 1
-	q := y & 1
 	
 	// Check for instructions that use HL
 	if involvesHL(opcode) {

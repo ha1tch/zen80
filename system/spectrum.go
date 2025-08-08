@@ -4,14 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ha1tch/zen80/io"
-	"github.com/ha1tch/zen80/memory"
 	"github.com/ha1tch/zen80/z80"
 )
 
 // Spectrum represents a ZX Spectrum system
 type Spectrum struct {
-	cpu         *z80.Z80
+	CPU         *z80.Z80  // Exported for testing
 	memory      *SpectrumMemory
 	io          *SpectrumIO
 	timing      *TimingController
@@ -112,10 +110,11 @@ func NewSpectrum() *Spectrum {
 		memory:     NewSpectrumMemory(),
 		timing:     NewSpectrumTiming(),
 		frameTimer: NewSpectrumFrameTimer(),
+		running:    true,  // Set running to true by default
 	}
 	
 	spec.io = NewSpectrumIO(&spec.border)
-	spec.cpu = z80.New(spec.memory, spec.io)
+	spec.CPU = z80.New(spec.memory, spec.io)
 	
 	return spec
 }
@@ -138,7 +137,7 @@ func (s *Spectrum) LoadSnapshot(address uint16, data []uint8) {
 
 // Reset resets the system
 func (s *Spectrum) Reset() {
-	s.cpu.Reset()
+	s.CPU.Reset()
 	s.border = 0
 	s.frameTimer = NewSpectrumFrameTimer()
 }
@@ -149,7 +148,7 @@ func (s *Spectrum) RunFrame() {
 	
 	for !frameDone && s.running {
 		// Execute one instruction
-		cycles := s.cpu.Step()
+		cycles := s.CPU.Step()
 		
 		// Update frame timing
 		frameEvent := s.frameTimer.AddCycles(cycles)
@@ -162,15 +161,15 @@ func (s *Spectrum) RunFrame() {
 		
 		if frameEvent.VBlankStart {
 			// Generate interrupt at start of vertical blank
-			s.cpu.INT = true
+			s.CPU.INT = true
 		}
 		
 		if frameEvent.FrameComplete {
-			s.cpu.INT = false // Clear interrupt
+			s.CPU.INT = false // Clear interrupt
 			frameDone = true
 		}
 		
-		// Update master timing
+		// Update master timing (this was being called but not tracking cycles properly)
 		if s.timing.AddCycles(cycles) {
 			// Frame boundary according to cycle count
 			// (should align with frameEvent.FrameComplete)
