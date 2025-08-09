@@ -3,7 +3,7 @@
 ### Key Gaps and Bugs Identified:
 1. **IXH/IXL/IYH/IYL Register Access**: Undocumented opcodes (DD/FD with specific values) that allow treating IX/IY as separate 8-bit registers are not implemented
 2. **ED Undefined Opcodes**: Many undefined ED opcodes should duplicate other ED instructions, but currently return NOP
-3. **Block I/O Flags**: INI/IND/OUTI/OUTD and their repeat variants have simplified flag handling, missing complex undocumented behavior
+3. **Block I/O Flags**: INI/IND/OUTI/OUTD and their repeat variants have simplified flag handling, missing complex undocumented behaviour
 4. **Interrupt Mode 0**: Simplified to always execute RST 38H instead of reading instruction from data bus
 5. **WZ Register Bug**: CB instructions with (HL) don't set WZ register, causing incorrect X/Y flags for BIT n,(HL)
 6. **Block Transfer Y Flag Bug**: LDI/LDD/CPI/CPD and repeat variants calculate Y flag incorrectly - using `((n << 4) & FlagY)` instead of `((n & 0x02) << 4)`
@@ -13,13 +13,13 @@
 1. **RLCA/RRCA/RLA/RRA**: Flag handling is correct - these instructions preserve S, Z, and P/V flags
 2. **JP (IX/IY)**: Works correctly despite confusing comment in `involvesHL()`
 3. **Most Documented Instructions**: All standard Z80 instructions are implemented
-4. **Undocumented Flags**: X and Y flag behavior is correctly implemented
-5. **DDCB/FDCB Register Copy**: Undocumented behavior where results are copied to registers is implemented# zen80 Z80 Implementation Function Mapping
+4. **Undocumented Flags**: X and Y flag behaviour is correctly implemented
+5. **DDCB/FDCB Register Copy**: Undocumented behaviour where results are copied to registers is implemented# zen80 Z80 Implementation Function Mapping
 
 ## Implementation Status Legend
-- **FULL**: Complete implementation with all documented behavior
+- **FULL**: Complete implementation with all documented behaviour
 - **NOT IMPL**: Not implemented
-- **NOP**: Defaults to NOP behavior
+- **NOP**: Defaults to NOP behaviour
 - **HANDLED**: Handled through special logic
 - **UNDOC**: Undocumented instruction implemented
 - **PARTIAL**: Partially implemented
