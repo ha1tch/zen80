@@ -108,7 +108,11 @@ func (z *Z80) Step() int {
 	// Handle interrupts
 	if z.handleInterrupts() {
 		// Interrupt was serviced
-		return z.getLastInstructionCycles()
+		cycles := z.getLastInstructionCycles()
+		// Increment R for the interrupt acknowledge M1 cycle
+		z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
+		z.Cycles += uint64(cycles)
+		return cycles
 	}
 
 	// If halted, just count cycles

@@ -3,6 +3,8 @@ package z80
 // executeED handles ED-prefixed instructions
 func (z *Z80) executeED() int {
 	opcode := z.fetchByte()
+	// Increment R for the post-prefix opcode fetch (M1)
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	
 	// Decode ED opcode structure
 	x := opcode >> 6        // Bits 7-6
@@ -27,7 +29,8 @@ func (z *Z80) executeED() int {
 			z.setFlag(FlagH, false)
 			z.setFlag(FlagPV, parity(val))
 			z.setFlag(FlagN, false)
-			z.F = (z.F & FlagC) | (val & (FlagX | FlagY))
+			z.setFlag(FlagX, val&FlagX != 0)
+			z.setFlag(FlagY, val&FlagY != 0)
 			z.WZ = z.BC() + 1
 			return 12
 			
@@ -115,7 +118,8 @@ func (z *Z80) executeED() int {
 				z.setFlag(FlagH, false)
 				z.setFlag(FlagPV, z.IFF2)
 				z.setFlag(FlagN, false)
-				z.F = (z.F & FlagC) | (z.A & (FlagX | FlagY))
+				z.setFlag(FlagX, z.A&FlagX != 0)
+			z.setFlag(FlagY, z.A&FlagY != 0)
 				return 9
 			case 3: // LD A,R
 				z.A = z.R
@@ -124,7 +128,8 @@ func (z *Z80) executeED() int {
 				z.setFlag(FlagH, false)
 				z.setFlag(FlagPV, z.IFF2)
 				z.setFlag(FlagN, false)
-				z.F = (z.F & FlagC) | (z.A & (FlagX | FlagY))
+				z.setFlag(FlagX, z.A&FlagX != 0)
+			z.setFlag(FlagY, z.A&FlagY != 0)
 				return 9
 			case 4: // RRD
 				z.rrd()
@@ -167,7 +172,8 @@ func (z *Z80) rrd() {
 	z.setFlag(FlagH, false)
 	z.setFlag(FlagPV, parity(z.A))
 	z.setFlag(FlagN, false)
-	z.F = (z.F & FlagC) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+			z.setFlag(FlagY, z.A&FlagY != 0)
 	z.WZ = z.HL() + 1
 }
 
@@ -184,7 +190,8 @@ func (z *Z80) rld() {
 	z.setFlag(FlagH, false)
 	z.setFlag(FlagPV, parity(z.A))
 	z.setFlag(FlagN, false)
-	z.F = (z.F & FlagC) | (z.A & (FlagX | FlagY))
+	z.setFlag(FlagX, z.A&FlagX != 0)
+			z.setFlag(FlagY, z.A&FlagY != 0)
 	z.WZ = z.HL() + 1
 }
 

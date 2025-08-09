@@ -3,6 +3,8 @@ package z80
 // executeCB handles CB-prefixed instructions
 func (z *Z80) executeCB() int {
 	opcode := z.fetchByte()
+	// Increment R for the post-prefix opcode fetch (M1)
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	
 	// Decode CB opcode structure
 	x := opcode >> 6        // Bits 7-6

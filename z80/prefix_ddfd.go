@@ -3,6 +3,8 @@ package z80
 // executeDD handles DD-prefixed instructions (IX operations)
 func (z *Z80) executeDD() int {
 	opcode := z.fetchByte()
+	// Increment R for the post-prefix opcode fetch (M1)
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	
 	// Handle special cases
 	switch opcode {
@@ -88,6 +90,8 @@ func (z *Z80) executeDD() int {
 // executeFD handles FD-prefixed instructions (IY operations)
 func (z *Z80) executeFD() int {
 	opcode := z.fetchByte()
+	// Increment R for the post-prefix opcode fetch (M1)
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	
 	// Handle special cases
 	switch opcode {
@@ -191,6 +195,11 @@ func (z *Z80) executeDDFDInstruction(opcode uint8, useIX bool) int {
 func (z *Z80) executeDDCB() int {
 	d := int8(z.fetchByte())
 	opcode := z.fetchByte()
+	
+	// Increment R for CB opcode fetch
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
+	// Increment R for the post-prefix opcode fetch (M1)
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	addr := uint16(int32(z.IX()) + int32(d))
 	z.WZ = addr
 	
@@ -201,6 +210,11 @@ func (z *Z80) executeDDCB() int {
 func (z *Z80) executeFDCB() int {
 	d := int8(z.fetchByte())
 	opcode := z.fetchByte()
+	
+	// Increment R for CB opcode fetch
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
+	// Increment R for the post-prefix opcode fetch (M1)
+	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	addr := uint16(int32(z.IY()) + int32(d))
 	z.WZ = addr
 	
@@ -236,7 +250,9 @@ func (z *Z80) executeDDFDCBOperation(opcode uint8, addr uint16) int {
 	case 1: // BIT y,(IX/IY+d)
 		z.bit(val, y)
 		// For BIT with DDCB/FDCB, flags use WZ high byte
-		z.F = (z.F & 0xC1) | (uint8(z.WZ>>8) & (FlagX | FlagY))
+		hi := uint8(z.WZ >> 8)
+		z.setFlag(FlagX, hi&FlagX != 0)
+		z.setFlag(FlagY, hi&FlagY != 0)
 		
 	case 2: // RES y,(IX/IY+d)
 		val &^= (1 << y)
