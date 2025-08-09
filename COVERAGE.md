@@ -1,6 +1,20 @@
-# zen80 Z80 Implementation Function Mapping
+## Implementation Summary Notes
 
-These tables document the extent of our Z80 instruction set coverage in the zen80 implementation of the Zilog Z80 microprocessor.
+### Key Gaps and Bugs Identified:
+1. **IXH/IXL/IYH/IYL Register Access**: Undocumented opcodes (DD/FD with specific values) that allow treating IX/IY as separate 8-bit registers are not implemented
+2. **ED Undefined Opcodes**: Many undefined ED opcodes should duplicate other ED instructions, but currently return NOP
+3. **Block I/O Flags**: INI/IND/OUTI/OUTD and their repeat variants have simplified flag handling, missing complex undocumented behavior
+4. **Interrupt Mode 0**: Simplified to always execute RST 38H instead of reading instruction from data bus
+5. **WZ Register Bug**: CB instructions with (HL) don't set WZ register, causing incorrect X/Y flags for BIT n,(HL)
+6. **Block Transfer Y Flag Bug**: LDI/LDD/CPI/CPD and repeat variants calculate Y flag incorrectly - using `((n << 4) & FlagY)` instead of `((n & 0x02) << 4)`
+7. **Cycle Verification**: `VerifyInstructionTiming()` function exists but is never called
+
+### Correctly Implemented Features:
+1. **RLCA/RRCA/RLA/RRA**: Flag handling is correct - these instructions preserve S, Z, and P/V flags
+2. **JP (IX/IY)**: Works correctly despite confusing comment in `involvesHL()`
+3. **Most Documented Instructions**: All standard Z80 instructions are implemented
+4. **Undocumented Flags**: X and Y flag behavior is correctly implemented
+5. **DDCB/FDCB Register Copy**: Undocumented behavior where results are copied to registers is implemented# zen80 Z80 Implementation Function Mapping
 
 ## Implementation Status Legend
 - **FULL**: Complete implementation with all documented behavior
@@ -136,7 +150,7 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 | CB 28-2F | SRA r | ✅ | FULL | `executeCB()` x=0, y=5 + `sra8()` |
 | CB 30-37 | SLL r | ✅ | UNDOC | `executeCB()` x=0, y=6 + `sll8()` |
 | CB 38-3F | SRL r | ✅ | FULL | `executeCB()` x=0, y=7 + `srl8()` |
-| CB 40-7F | BIT n,r | ✅ | FULL | `executeCB()` x=1 + `bit()` |
+| CB 40-7F | BIT n,r | ⚠️ | PARTIAL | `executeCB()` x=1 + `bit()` (BUG: WZ not set for (HL) variant, affects flags) |
 | CB 80-BF | RES n,r | ✅ | FULL | `executeCB()` x=2 |
 | CB C0-FF | SET n,r | ✅ | FULL | `executeCB()` x=3 |
 
@@ -208,23 +222,23 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 | ED 7D | RETN | ✅ | FULL | `executeED()` x=1, z=5 |
 | ED 7E | IM 2 | ✅ | FULL | `executeED()` x=1, z=6, y=7 |
 | ED 7F | NOP | ✅ | NOP | `executeED()` x=1, z=7, y=7 |
-| ED A0 | LDI | ✅ | FULL | `executeBlockInstruction()` → `ldi()` |
-| ED A1 | CPI | ✅ | FULL | `executeBlockInstruction()` → `cpi()` |
-| ED A2 | INI | ✅ | FULL | `executeBlockInstruction()` → `ini()` |
-| ED A3 | OUTI | ✅ | FULL | `executeBlockInstruction()` → `outi()` |
-| ED A8 | LDD | ✅ | FULL | `executeBlockInstruction()` → `ldd()` |
-| ED A9 | CPD | ✅ | FULL | `executeBlockInstruction()` → `cpd()` |
-| ED AA | IND | ✅ | FULL | `executeBlockInstruction()` → `ind()` |
-| ED AB | OUTD | ✅ | FULL | `executeBlockInstruction()` → `outd()` |
-| ED B0 | LDIR | ✅ | FULL | `executeBlockInstruction()` → `ldir()` |
-| ED B1 | CPIR | ✅ | FULL | `executeBlockInstruction()` → `cpir()` |
-| ED B2 | INIR | ✅ | FULL | `executeBlockInstruction()` → `inir()` |
-| ED B3 | OTIR | ✅ | FULL | `executeBlockInstruction()` → `otir()` |
-| ED B8 | LDDR | ✅ | FULL | `executeBlockInstruction()` → `lddr()` |
-| ED B9 | CPDR | ✅ | FULL | `executeBlockInstruction()` → `cpdr()` |
-| ED BA | INDR | ✅ | FULL | `executeBlockInstruction()` → `indr()` |
-| ED BB | OTDR | ✅ | FULL | `executeBlockInstruction()` → `otdr()` |
-| ED others | Undefined | ❌ | NOP | `executeED()` default return 8 |
+| ED A0 | LDI | ⚠️ | PARTIAL | `executeBlockInstruction()` → `ldi()` (BUG: Y flag calculation incorrect) |
+| ED A1 | CPI | ⚠️ | PARTIAL | `executeBlockInstruction()` → `cpi()` (BUG: Y flag calculation incorrect) |
+| ED A2 | INI | ⚠️ | SIMPLE | `executeBlockInstruction()` → `ini()` |
+| ED A3 | OUTI | ⚠️ | SIMPLE | `executeBlockInstruction()` → `outi()` |
+| ED A8 | LDD | ⚠️ | PARTIAL | `executeBlockInstruction()` → `ldd()` (BUG: Y flag calculation incorrect) |
+| ED A9 | CPD | ⚠️ | PARTIAL | `executeBlockInstruction()` → `cpd()` (BUG: Y flag calculation incorrect) |
+| ED AA | IND | ⚠️ | SIMPLE | `executeBlockInstruction()` → `ind()` |
+| ED AB | OUTD | ⚠️ | SIMPLE | `executeBlockInstruction()` → `outd()` |
+| ED B0 | LDIR | ⚠️ | PARTIAL | `executeBlockInstruction()` → `ldir()` (BUG: Y flag calculation incorrect) |
+| ED B1 | CPIR | ⚠️ | PARTIAL | `executeBlockInstruction()` → `cpir()` (BUG: Y flag calculation incorrect) |
+| ED B2 | INIR | ⚠️ | SIMPLE | `executeBlockInstruction()` → `inir()` |
+| ED B3 | OTIR | ⚠️ | SIMPLE | `executeBlockInstruction()` → `otir()` |
+| ED B8 | LDDR | ⚠️ | PARTIAL | `executeBlockInstruction()` → `lddr()` (BUG: Y flag calculation incorrect) |
+| ED B9 | CPDR | ⚠️ | PARTIAL | `executeBlockInstruction()` → `cpdr()` (BUG: Y flag calculation incorrect) |
+| ED BA | INDR | ⚠️ | SIMPLE | `executeBlockInstruction()` → `indr()` |
+| ED BB | OTDR | ⚠️ | SIMPLE | `executeBlockInstruction()` → `otdr()` |
+| ED others | Undefined | ❌ | NOP | `executeED()` default return 8 (should be duplicates of other ED opcodes) |
 
 ## DD-Prefixed (IX) Instructions
 
@@ -242,15 +256,17 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 | DD 35 | DEC (IX+d) | ✅ | FULL | `executeDD()` special case handling |
 | DD 36 | LD (IX+d),n | ✅ | FULL | `executeDD()` special case handling |
 | DD 39 | ADD IX,SP | ✅ | FULL | `executeDDFDInstruction()` with HL substitution |
+| DD 44-45,4C-4D,54-55,5C-5D,60-65,67-6D | LD with IXH/IXL | ❌ | NOT IMPL | Should allow IXH/IXL as registers (undocumented) |
 | DD 46-7E | LD r,(IX+d) | ✅ | FULL | `executeDD()` special case handling |
 | DD 70-77 | LD (IX+d),r | ✅ | FULL | `executeDD()` special case handling |
+| DD 84-85,8C-8D,94-95,9C-9D,A4-A5,AC-AD,B4-B5,BC-BD | ALU with IXH/IXL | ❌ | NOT IMPL | Should allow IXH/IXL as registers (undocumented) |
 | DD 86-BE | ALU ops (IX+d) | ✅ | FULL | `executeDD()` special case handling |
 | DD CB | DDCB prefix | ✅ | HANDLED | `executeDD()` → `executeDDCB()` |
 | DD DD | Double DD | ✅ | NOP | `executeDD()` returns 4 |
 | DD E1 | POP IX | ✅ | FULL | `executeDDFDInstruction()` with HL substitution |
 | DD E3 | EX (SP),IX | ✅ | FULL | `executeDDFDInstruction()` with HL substitution |
 | DD E5 | PUSH IX | ✅ | FULL | `executeDDFDInstruction()` with HL substitution |
-| DD E9 | JP (IX) | ✅ | FULL | `executeDDFDInstruction()` with HL substitution |
+| DD E9 | JP (IX) | ✅ | FULL | `executeDDFDInstruction()` with HL substitution (despite confusing comment) |
 | DD ED | ED after DD | ✅ | HANDLED | `executeDD()` → `executeED()` + 4 |
 | DD F9 | LD SP,IX | ✅ | FULL | `executeDDFDInstruction()` with HL substitution |
 | DD FD | FD after DD | ✅ | HANDLED | `executeDD()` → `executeFD()` + 4 |
@@ -259,6 +275,8 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 
 | Opcode | Instruction | Coverage | Implementation | Function Location |
 |--------|-------------|----------|----------------|-------------------|
+| FD 44-45,4C-4D,54-55,5C-5D,60-65,67-6D | LD with IYH/IYL | ❌ | NOT IMPL | Should allow IYH/IYL as registers (undocumented) |
+| FD 84-85,8C-8D,94-95,9C-9D,A4-A5,AC-AD,B4-B5,BC-BD | ALU with IYH/IYL | ❌ | NOT IMPL | Should allow IYH/IYL as registers (undocumented) |
 | FD 09-F9 | All IY ops | ✅ | FULL | `executeFD()` mirrors `executeDD()` logic |
 | FD CB | FDCB prefix | ✅ | HANDLED | `executeFD()` → `executeFDCB()` |
 | FD DD | DD after FD | ✅ | HANDLED | `executeFD()` → `executeDD()` + 4 |
@@ -284,17 +302,17 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 
 ## Support Functions
 
-| Function | Purpose | File |
-|----------|---------|------|
-| `execute()` | Main instruction decoder | decode.go |
-| `executeBlock0()` | Opcodes 0x00-0x3F decoder | decode.go |
-| `executeBlock1()` | Opcodes 0x40-0x7F decoder | decode.go |
-| `executeBlock2()` | Opcodes 0x80-0xBF decoder | decode.go |
-| `executeBlock3()` | Opcodes 0xC0-0xFF decoder | decode.go |
-| `executeCB()` | CB prefix handler | prefix_cb.go |
-| `executeED()` | ED prefix handler | prefix_ed.go |
-| `executeDD()` | DD prefix handler | prefix_ddfd.go |
-| `executeFD()` | FD prefix handler | prefix_ddfd.go |
+| Function | Purpose | File | Notes |
+|----------|---------|------|-------|
+| `execute()` | Main instruction decoder | decode.go | |
+| `executeBlock0()` | Opcodes 0x00-0x3F decoder | decode.go | |
+| `executeBlock1()` | Opcodes 0x40-0x7F decoder | decode.go | |
+| `executeBlock2()` | Opcodes 0x80-0xBF decoder | decode.go | |
+| `executeBlock3()` | Opcodes 0xC0-0xFF decoder | decode.go | |
+| `executeCB()` | CB prefix handler | prefix_cb.go | BUG: WZ not set for (HL) operations |
+| `executeED()` | ED prefix handler | prefix_ed.go | |
+| `executeDD()` | DD prefix handler | prefix_ddfd.go | Missing IXH/IXL register access |
+| `executeFD()` | FD prefix handler | prefix_ddfd.go | Missing IYH/IYL register access |
 | `executeDDCB()` | DDCB prefix handler | prefix_ddfd.go |
 | `executeFDCB()` | FDCB prefix handler | prefix_ddfd.go |
 | `executeDDFDInstruction()` | IX/IY instruction executor | prefix_ddfd.go |
@@ -310,18 +328,19 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 | `neg()` | Negate accumulator | prefix_ed.go |
 | `rrd()`, `rld()` | Rotate decimal | prefix_ed.go |
 | `bit()` | Bit test | prefix_cb.go |
-| `ldi()`, `ldd()`, `ldir()`, `lddr()` | Block transfer | prefix_ed.go |
-| `cpi()`, `cpd()`, `cpir()`, `cpdr()` | Block search | prefix_ed.go |
-| `ini()`, `ind()`, `inir()`, `indr()` | Block input | prefix_ed.go |
-| `outi()`, `outd()`, `otir()`, `otdr()` | Block output | prefix_ed.go |
+| `ldi()`, `ldd()`, `ldir()`, `lddr()` | Block transfer | prefix_ed.go | BUG: Y flag calculation `((n << 4) & FlagY)` should be `((n & 0x02) << 4)` |
+| `cpi()`, `cpd()`, `cpir()`, `cpdr()` | Block search | prefix_ed.go | BUG: Y flag calculation `((n << 4) & FlagY)` should be `((n & 0x02) << 4)` |
+| `ini()`, `ind()`, `inir()`, `indr()` | Block input | prefix_ed.go | Simplified flag handling |
+| `outi()`, `outd()`, `otir()`, `otdr()` | Block output | prefix_ed.go | Simplified flag handling |
 | `testCondition()` | Conditional test | z80.go |
 | `getRegister8()` | Register access | decode.go |
-| `involvesHL()` | HL instruction check | prefix_ddfd.go |
-| `parity()` | Parity calculation | alu.go |
-| `push()`, `pop()` | Stack operations | z80.go |
-| `fetchByte()`, `fetchWord()` | Memory fetch | z80.go |
-| `readWord()`, `writeWord()` | Memory access | z80.go |
-| `handleInterrupts()` | Interrupt handler | z80.go |
+| `involvesHL()` | HL instruction check | prefix_ddfd.go | Has confusing comment about JP (HL) |
+| `parity()` | Parity calculation | alu.go | |
+| `push()`, `pop()` | Stack operations | z80.go | |
+| `fetchByte()`, `fetchWord()` | Memory fetch | z80.go | |
+| `readWord()`, `writeWord()` | Memory access | z80.go | |
+| `handleInterrupts()` | Interrupt handler | z80.go | Mode 0 simplified |
+| `VerifyInstructionTiming()` | Cycle verification | timing_fixes.go | Never called in code |
 
 ## Special Registers and Features
 
@@ -329,7 +348,7 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 |---------|----------|----------------|-------------------|
 | A,F,B,C,D,E,H,L | ✅ | FULL | Direct fields in Z80 struct |
 | A',F',B',C',D',E',H',L' | ✅ | FULL | Direct fields in Z80 struct |
-| IXH,IXL,IYH,IYL | ✅ | PARTIAL | Direct fields, not opcode accessible |
+| IXH,IXL,IYH,IYL | ❌ | NOT IMPL | Direct fields exist but not opcode accessible (DD/FD 44,45,4C,4D,54,55,5C,5D,etc. missing) |
 | I,R | ✅ | FULL | Direct fields in Z80 struct |
 | SP,PC | ✅ | FULL | Direct fields in Z80 struct |
 | WZ (MEMPTR) | ✅ | FULL | Direct field in Z80 struct |
@@ -345,7 +364,7 @@ These tables document the extent of our Z80 instruction set coverage in the zen8
 | Feature | Coverage | Implementation | Function Location |
 |---------|----------|----------------|-------------------|
 | NMI handling | ✅ | FULL | `handleInterrupts()` in z80.go |
-| INT Mode 0 | ✅ | SIMPLE | `handleInterrupts()` defaults to RST 38H |
+| INT Mode 0 | ⚠️ | SIMPLE | `handleInterrupts()` defaults to RST 38H (should execute data bus instruction) |
 | INT Mode 1 | ✅ | FULL | `handleInterrupts()` jumps to 0x0038 |
 | INT Mode 2 | ✅ | FULL | `handleInterrupts()` vectored via I register |
 | EI delay | ✅ | FULL | `Step()` with pendingEI flag |
