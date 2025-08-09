@@ -55,7 +55,7 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 				cpu.WZ = cpu.PC
 				return 12
 			}
-			cpu.fetchByte() // Skip displacement if not taken
+			cpu.fetchByte() // Skip displacement
 			return 7
 		}
 
@@ -176,48 +176,24 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 		// Assorted operations on accumulator/flags
 		switch y {
 		case 0: // RLCA
-			carry := cpu.A >> 7
-			cpu.A = (cpu.A << 1) | carry
-			cpu.setFlag(FlagC, carry != 0)
-			cpu.setFlag(FlagN, false)
-			cpu.setFlag(FlagH, false)
-			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
-			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
+			cpu.A = cpu.rlc8(cpu.A)
+			// RLCA doesn't affect S, Z, P/V flags
+			cpu.F &^= (FlagZ | FlagPV | FlagS)
 			return 4
 		case 1: // RRCA
-			carry := cpu.A & 1
-			cpu.A = (cpu.A >> 1) | (carry << 7)
-			cpu.setFlag(FlagC, carry != 0)
-			cpu.setFlag(FlagN, false)
-			cpu.setFlag(FlagH, false)
-			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
-			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
+			cpu.A = cpu.rrc8(cpu.A)
+			// RRCA doesn't affect S, Z, P/V flags
+			cpu.F &^= (FlagZ | FlagPV | FlagS)
 			return 4
 		case 2: // RLA
-			oldCarry := uint8(0)
-			if cpu.getFlag(FlagC) {
-				oldCarry = 1
-			}
-			newCarry := cpu.A >> 7
-			cpu.A = (cpu.A << 1) | oldCarry
-			cpu.setFlag(FlagC, newCarry != 0)
-			cpu.setFlag(FlagN, false)
-			cpu.setFlag(FlagH, false)
-			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
-			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
+			cpu.A = cpu.rl8(cpu.A)
+			// RLA doesn't affect S, Z, P/V flags
+			cpu.F &^= (FlagZ | FlagPV | FlagS)
 			return 4
 		case 3: // RRA
-			oldCarry := uint8(0)
-			if cpu.getFlag(FlagC) {
-				oldCarry = 0x80
-			}
-			newCarry := cpu.A & 1
-			cpu.A = (cpu.A >> 1) | oldCarry
-			cpu.setFlag(FlagC, newCarry != 0)
-			cpu.setFlag(FlagN, false)
-			cpu.setFlag(FlagH, false)
-			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
-			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
+			cpu.A = cpu.rr8(cpu.A)
+			// RRA doesn't affect S, Z, P/V flags
+			cpu.F &^= (FlagZ | FlagPV | FlagS)
 			return 4
 		case 4: // DAA
 			cpu.daa()
@@ -226,6 +202,7 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 			cpu.A = ^cpu.A
 			cpu.setFlag(FlagN, true)
 			cpu.setFlag(FlagH, true)
+			// FIX: X and Y flags come from A register (after complement)
 			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
 			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
@@ -233,14 +210,16 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 			cpu.setFlag(FlagC, true)
 			cpu.setFlag(FlagN, false)
 			cpu.setFlag(FlagH, false)
+			// FIX: X and Y flags come from A register
 			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
 			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
 		case 7: // CCF
 			oldCarry := cpu.getFlag(FlagC)
 			cpu.setFlag(FlagC, !oldCarry)
-			cpu.setFlag(FlagH, oldCarry)
+			cpu.setFlag(FlagH, oldCarry)  // H = old C
 			cpu.setFlag(FlagN, false)
+			// FIX: X and Y flags come from A register
 			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
 			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4

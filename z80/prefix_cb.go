@@ -6,6 +6,11 @@ func (z *Z80) executeCB() int {
 	// Increment R for the post-prefix opcode fetch (M1)
 	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 	
+	// Debug M1 trace for post-prefix fetch
+	if DEBUG_M1 && z.M1Hook != nil {
+		z.M1Hook(z.PC-1, opcode, "post-CB")
+	}
+	
 	// Decode CB opcode structure
 	x := opcode >> 6        // Bits 7-6
 	y := (opcode >> 3) & 7   // Bits 5-3
@@ -20,6 +25,8 @@ func (z *Z80) executeCB() int {
 		// (HL) operand
 		addr = z.HL()
 		val = z.Memory.Read(addr)
+		// FIX: Set WZ for proper flag handling
+		z.WZ = addr + 1
 		cycles = 15 // CB operations on (HL) take longer
 	} else {
 		// Register operand
@@ -46,16 +53,17 @@ func (z *Z80) executeCB() int {
 			*z.getRegister8(z_val) = val
 		}
 		
-			case 1: // BIT y,r
+	case 1: // BIT y,r
 		z.bit(val, y)
 		if z_val == 6 {
 			cycles = 12 // BIT n,(HL) is faster than other (HL) ops
-			// For BIT n,(HL), X and Y flags come from high byte of address
-			// The high byte is already in H register
-			z.setFlag(FlagX, z.H&FlagX != 0)
-			z.setFlag(FlagY, z.H&FlagY != 0)
+			// FIX: For BIT n,(HL), X and Y flags come from WZ high byte
+			wz_hi := uint8(z.WZ >> 8)
+			z.setFlag(FlagX, wz_hi&FlagX != 0)
+			z.setFlag(FlagY, wz_hi&FlagY != 0)
 		}
-		case 2: // RES y,r
+		
+	case 2: // RES y,r
 		val &^= (1 << y)
 		if z_val == 6 {
 			z.Memory.Write(addr, val)
@@ -91,6 +99,7 @@ func (z *Z80) bit(val uint8, bit uint8) {
 	// PV flag is set to same as Z flag for BIT
 	z.setFlag(FlagPV, result == 0)
 	// X and Y flags copy bits 3 and 5 of the value
+	// Note: For BIT n,(HL), these are overridden in executeCB()
 	z.setFlag(FlagX, val&FlagX != 0)
 	z.setFlag(FlagY, val&FlagY != 0)
 }
