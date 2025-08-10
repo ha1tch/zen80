@@ -176,25 +176,89 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 		// Assorted operations on accumulator/flags
 		switch y {
 		case 0: // RLCA
-			cpu.A = cpu.rlc8(cpu.A)
-			// RLCA doesn't affect S, Z, P/V flags
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			// Save S, Z, P/V flags before operation
+			savedFlags := cpu.F & (FlagS | FlagZ | FlagPV)
+			
+			// Perform the rotation
+			carry := cpu.A >> 7
+			cpu.A = (cpu.A << 1) | carry
+			
+			// Set flags: preserve S, Z, P/V; update H, N, C, X, Y
+			cpu.F = savedFlags // Start with preserved flags
+			cpu.setFlag(FlagC, carry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			// X and Y come from result A
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
+			
 		case 1: // RRCA
-			cpu.A = cpu.rrc8(cpu.A)
-			// RRCA doesn't affect S, Z, P/V flags
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			// Save S, Z, P/V flags before operation
+			savedFlags := cpu.F & (FlagS | FlagZ | FlagPV)
+			
+			// Perform the rotation
+			carry := cpu.A & 0x01
+			cpu.A = (cpu.A >> 1) | (carry << 7)
+			
+			// Set flags: preserve S, Z, P/V; update H, N, C, X, Y
+			cpu.F = savedFlags // Start with preserved flags
+			cpu.setFlag(FlagC, carry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			// X and Y come from result A
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
+			
 		case 2: // RLA
-			cpu.A = cpu.rl8(cpu.A)
-			// RLA doesn't affect S, Z, P/V flags
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			// Save S, Z, P/V flags before operation
+			savedFlags := cpu.F & (FlagS | FlagZ | FlagPV)
+			
+			// Get old carry
+			oldCarry := uint8(0)
+			if cpu.getFlag(FlagC) {
+				oldCarry = 1
+			}
+			
+			// Perform the rotation
+			newCarry := cpu.A >> 7
+			cpu.A = (cpu.A << 1) | oldCarry
+			
+			// Set flags: preserve S, Z, P/V; update H, N, C, X, Y
+			cpu.F = savedFlags // Start with preserved flags
+			cpu.setFlag(FlagC, newCarry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			// X and Y come from result A
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
+			
 		case 3: // RRA
-			cpu.A = cpu.rr8(cpu.A)
-			// RRA doesn't affect S, Z, P/V flags
-			cpu.F &^= (FlagZ | FlagPV | FlagS)
+			// Save S, Z, P/V flags before operation
+			savedFlags := cpu.F & (FlagS | FlagZ | FlagPV)
+			
+			// Get old carry
+			oldCarry := uint8(0)
+			if cpu.getFlag(FlagC) {
+				oldCarry = 0x80
+			}
+			
+			// Perform the rotation
+			newCarry := cpu.A & 0x01
+			cpu.A = (cpu.A >> 1) | oldCarry
+			
+			// Set flags: preserve S, Z, P/V; update H, N, C, X, Y
+			cpu.F = savedFlags // Start with preserved flags
+			cpu.setFlag(FlagC, newCarry != 0)
+			cpu.setFlag(FlagN, false)
+			cpu.setFlag(FlagH, false)
+			// X and Y come from result A
+			cpu.setFlag(FlagX, cpu.A&FlagX != 0)
+			cpu.setFlag(FlagY, cpu.A&FlagY != 0)
 			return 4
+			
 		case 4: // DAA
 			cpu.daa()
 			return 4

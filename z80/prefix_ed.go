@@ -313,12 +313,15 @@ func (z *Z80) ldi() int {
 	z.SetDE(z.DE() + 1)
 	z.SetBC(z.BC() - 1)
 	
+	// FIXED: Calculate X and Y flags FIRST, preserving S, Z, C
+	n := val + z.A
+	z.F = (z.F & (FlagS | FlagZ | FlagC)) | (n & FlagX) | ((n & 0x02) << 4)
+	
+	// THEN set the other flags
 	z.setFlag(FlagH, false)
 	z.setFlag(FlagPV, z.BC() != 0)
 	z.setFlag(FlagN, false)
-	// X and Y flags are complex for block instructions
-	n := val + z.A
-	z.F = (z.F & (FlagS | FlagZ | FlagC)) | (n & FlagX) | ((n & 0x02) << 4)
+	
 	return 16
 }
 
@@ -329,12 +332,15 @@ func (z *Z80) ldd() int {
 	z.SetDE(z.DE() - 1)
 	z.SetBC(z.BC() - 1)
 	
+	// FIXED: Calculate X and Y flags FIRST, preserving S, Z, C
+	n := val + z.A
+	z.F = (z.F & (FlagS | FlagZ | FlagC)) | (n & FlagX) | ((n & 0x02) << 4)
+	
+	// THEN set the other flags
 	z.setFlag(FlagH, false)
 	z.setFlag(FlagPV, z.BC() != 0)
 	z.setFlag(FlagN, false)
-	// Y flag calculation
-	n := val + z.A
-	z.F = (z.F & (FlagS | FlagZ | FlagC)) | (n & FlagX) | ((n & 0x02) << 4)
+	
 	return 16
 }
 
