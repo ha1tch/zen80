@@ -142,24 +142,24 @@ func (cpu *Z80) executeBlock0(opcode uint8, y, z, p, q uint8) int {
 		}
 
 	case 4: // INC r
-		reg := cpu.getRegister8(y)
 		if y == 6 { // (HL)
 			addr := cpu.HL()
 			val := cpu.Memory.Read(addr)
 			cpu.Memory.Write(addr, cpu.inc8(val))
 			return 11
 		}
+		reg := cpu.getRegister8(y)
 		*reg = cpu.inc8(*reg)
 		return 4
 
 	case 5: // DEC r
-		reg := cpu.getRegister8(y)
 		if y == 6 { // (HL)
 			addr := cpu.HL()
 			val := cpu.Memory.Read(addr)
 			cpu.Memory.Write(addr, cpu.dec8(val))
 			return 11
 		}
+		reg := cpu.getRegister8(y)
 		*reg = cpu.dec8(*reg)
 		return 4
 

@@ -4,9 +4,9 @@ package z80
 import "log"
 
 // Configuration flags
-const (
+var (
 	DEBUG_TIMING = false // Set to true to enable cycle verification
-	DEBUG_M1     = false // Set to true to enable M1 cycle tracing
+	DEBUG_M1     = true  // Set to true to enable M1 cycle tracing
 )
 
 // Z80 represents the state of a Z80 CPU.
@@ -37,20 +37,20 @@ type Z80 struct {
 	WZ uint16 // Internal temporary register (MEMPTR)
 
 	// Interrupt flip-flops
-	IFF1 bool // Interrupt enable flip-flop 1
-	IFF2 bool // Interrupt enable flip-flop 2
+	IFF1 bool  // Interrupt enable flip-flop 1
+	IFF2 bool  // Interrupt enable flip-flop 2
 	IM   uint8 // Interrupt mode (0, 1, or 2)
 
 	// State tracking
-	Halted        bool   // CPU is halted
-	Cycles        uint64 // Total cycles executed
-	pendingEI     bool   // EI instruction just executed
-	pendingDI     bool   // DI instruction just executed
-	lastPrefix    uint8  // Last prefix for cycle verification (0=none, 0xCB, 0xDD, 0xED, 0xFD)
-	lastCycles    int    // Cycles from last executed instruction
-	
+	Halted     bool   // CPU is halted
+	Cycles     uint64 // Total cycles executed
+	pendingEI  bool   // EI instruction just executed
+	pendingDI  bool   // DI instruction just executed
+	lastPrefix uint8  // Last prefix for cycle verification (0=none, 0xCB, 0xDD, 0xED, 0xFD)
+	lastCycles int    // Cycles from last executed instruction
+
 	// Debug hooks
-	M1Hook        func(pc uint16, opcode uint8, context string) // Called on M1 cycles when DEBUG_M1 is true
+	M1Hook func(pc uint16, opcode uint8, context string) // Called on M1 cycles when DEBUG_M1 is true
 
 	// Memory interface
 	Memory MemoryInterface
@@ -62,7 +62,7 @@ type Z80 struct {
 	NMI     bool // Non-maskable interrupt pending
 	INT     bool // Maskable interrupt pending (level-triggered - must be cleared by external hardware)
 	nmiEdge bool // For NMI edge detection (prevents re-triggering while held high)
-	
+
 	// Mode 0 interrupt instruction buffer
 	mode0Buffer []uint8 // Instruction bytes for Mode 0 interrupt
 	mode0Index  int     // Current position in mode0Buffer
@@ -101,10 +101,10 @@ const (
 	FlagH  uint8 = 0x10 // Half Carry
 	FlagZ  uint8 = 0x40 // Zero
 	FlagS  uint8 = 0x80 // Sign
-	
+
 	// Undocumented flags (bits 3 and 5)
-	FlagX  uint8 = 0x08 // Copy of bit 3
-	FlagY  uint8 = 0x20 // Copy of bit 5
+	FlagX uint8 = 0x08 // Copy of bit 3
+	FlagY uint8 = 0x20 // Copy of bit 5
 )
 
 // Interrupt acknowledge cycle counts
@@ -113,9 +113,9 @@ const (
 // - IM1: 7 cycles (M1 acknowledge) + 6 cycles (2x memory write for PUSH) = 13
 // - IM2: 7 cycles (M1 acknowledge) + 6 cycles (PUSH) + 6 cycles (vector read) = 19
 const (
-	NMI_CYCLES  = 11  // NMI acknowledge + push PC
-	IM1_CYCLES  = 13  // Mode 1: interrupt acknowledge + RST 38H
-	IM2_CYCLES  = 19  // Mode 2: interrupt acknowledge + read vector + jump
+	NMI_CYCLES = 11 // NMI acknowledge + push PC
+	IM1_CYCLES = 13 // Mode 1: interrupt acknowledge + RST 38H
+	IM2_CYCLES = 19 // Mode 2: interrupt acknowledge + read vector + jump
 )
 
 // New creates a new Z80 CPU instance.
@@ -158,7 +158,7 @@ func (z *Z80) Step() int {
 		z.Cycles += uint64(cycles)
 		return cycles
 	}
-	
+
 	// Handle interrupts
 	if cycles, handled := z.handleInterrupts(); handled {
 		z.lastCycles = cycles
@@ -191,24 +191,24 @@ func (z *Z80) Step() int {
 	// Fetch and execute instruction
 	startPC := z.PC // Save for debugging
 	opcode := z.fetchByte()
-	
+
 	// Increment R register immediately after M1 cycle (opcode fetch)
 	// This ensures LD A,R sees the post-increment value
 	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
-	
+
 	// Debug M1 trace
 	if DEBUG_M1 && z.M1Hook != nil {
 		z.M1Hook(startPC, opcode, "normal")
 	}
-	
+
 	// Track prefix for cycle verification
 	z.lastPrefix = 0
 	if opcode == 0xCB || opcode == 0xDD || opcode == 0xED || opcode == 0xFD {
 		z.lastPrefix = opcode
 	}
-	
+
 	cycles := z.execute(opcode)
-	
+
 	// Verify cycle timing if enabled
 	if DEBUG_TIMING {
 		// For conditional instructions, we can't easily determine if branch was taken
@@ -218,7 +218,7 @@ func (z *Z80) Step() int {
 				startPC, opcode, z.lastPrefix, cycles)
 		}
 	}
-	
+
 	z.lastCycles = cycles
 	z.Cycles += uint64(cycles)
 	return cycles
@@ -255,7 +255,7 @@ func (z *Z80) fetchByte() uint8 {
 		z.mode0Index++
 		return val
 	}
-	
+
 	// Normal memory fetch
 	val := z.Memory.Read(z.PC)
 	z.PC++
@@ -311,22 +311,31 @@ func (z *Z80) setFlag(flag uint8, value bool) {
 // Condition code helpers
 func (z *Z80) testCondition(cc uint8) bool {
 	switch cc {
-	case 0: return !z.getFlag(FlagZ)  // NZ
-	case 1: return z.getFlag(FlagZ)   // Z
-	case 2: return !z.getFlag(FlagC)  // NC
-	case 3: return z.getFlag(FlagC)   // C
-	case 4: return !z.getFlag(FlagPV) // PO
-	case 5: return z.getFlag(FlagPV)  // PE
-	case 6: return !z.getFlag(FlagS)  // P
-	case 7: return z.getFlag(FlagS)   // M
-	default: return false
+	case 0:
+		return !z.getFlag(FlagZ) // NZ
+	case 1:
+		return z.getFlag(FlagZ) // Z
+	case 2:
+		return !z.getFlag(FlagC) // NC
+	case 3:
+		return z.getFlag(FlagC) // C
+	case 4:
+		return !z.getFlag(FlagPV) // PO
+	case 5:
+		return z.getFlag(FlagPV) // PE
+	case 6:
+		return !z.getFlag(FlagS) // P
+	case 7:
+		return z.getFlag(FlagS) // M
+	default:
+		return false
 	}
 }
 
 // handleInterrupts checks and processes pending interrupts
 // Returns (cycles, handled) where cycles is the number of cycles consumed
 // and handled is true if an interrupt was processed.
-// 
+//
 // IMPORTANT: The INT line is level-triggered. External hardware/peripherals must
 // clear the INT signal after the interrupt is serviced, otherwise it will
 // continuously re-trigger. This matches real Z80 behavior.
@@ -357,7 +366,7 @@ func (z *Z80) handleInterrupts() (int, bool) {
 		z.Halted = false
 		z.IFF1 = false
 		z.IFF2 = false
-		
+
 		switch z.IM {
 		case 0:
 			// Mode 0: Execute instruction provided by interrupting device
@@ -390,7 +399,7 @@ func (z *Z80) handleInterrupts() (int, bool) {
 				z.M1Hook(0x0038, 0xFF, "IM0-fallback")
 			}
 			return IM1_CYCLES, true
-			
+
 		case 1:
 			// Mode 1: RST 38H (fixed vector at 0x0038)
 			z.push(z.PC)
@@ -403,7 +412,7 @@ func (z *Z80) handleInterrupts() (int, bool) {
 				z.M1Hook(0x0038, 0xFF, "IM1")
 			}
 			return IM1_CYCLES, true
-			
+
 		case 2:
 			// Mode 2: Vectored interrupt
 			// The interrupting device supplies the low byte of the vector
@@ -414,7 +423,7 @@ func (z *Z80) handleInterrupts() (int, bool) {
 			} else {
 				vector = 0xFF // Default if no controller
 			}
-			addr := uint16(z.I)<<8 | uint16(vector & 0xFE) // Low bit forced to 0
+			addr := uint16(z.I)<<8 | uint16(vector&0xFE) // Low bit forced to 0
 			z.PC = z.readWord(addr)
 			z.WZ = z.PC
 			// Increment R for the interrupt acknowledge M1 cycle
@@ -439,36 +448,36 @@ func (z *Z80) executeMode0Instruction() int {
 		z.mode0Active = false
 		return 0 // Return 0 to avoid phantom cycles in safety net case
 	}
-	
+
 	// Set mode0Active flag so fetchByte will read from buffer
 	z.mode0Active = true
-	
+
 	// Get the first opcode (already in buffer at current index)
 	opcode := z.mode0Buffer[z.mode0Index]
 	z.mode0Index++
-	
+
 	// Increment R register for the Mode 0 instruction's M1 cycle (opcode fetch)
 	// This is the only R increment for the entire instruction, regardless of length
 	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
-	
+
 	// Debug M1 trace
 	if DEBUG_M1 && z.M1Hook != nil {
 		z.M1Hook(z.PC, opcode, "IM0")
 	}
-	
+
 	// Execute the instruction (fetchByte will now read from buffer)
 	// Since we're in Mode 0 context, fetchByte doesn't advance PC,
 	// so non-branching instructions leave PC unchanged (which is correct)
 	// Branching instructions (JP/CALL/RET) will modify PC as expected
 	cycles := z.execute(opcode)
-	
+
 	// Clear buffer if we've executed all bytes
 	if z.mode0Index >= len(z.mode0Buffer) {
 		z.mode0Buffer = nil
 		z.mode0Index = 0
 		z.mode0Active = false
 	}
-	
+
 	return cycles
 }
 

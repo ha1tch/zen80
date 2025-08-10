@@ -1,0 +1,25 @@
+------------------------------------------------------------
+ZX Spectrum ROM Copyright Notice and Permission Statement
+------------------------------------------------------------
+
+The ROM images from the Sinclair ZX Spectrum are copyrighted works.
+Copyright © Amstrad Consumer Electronics plc.
+
+Amstrad have kindly given their permission for the redistribution of their 
+copyrighted material, but retain that copyright.
+
+You are permitted to use and redistribute the Spectrum ROM images provided 
+in this package under the following conditions:
+
+1. The original ROM images must be kept intact and unmodified, including 
+   all embedded copyright notices.
+2. You may not sell the ROM images separately.
+3. You may charge for emulator software that uses these ROMs, but the ROM 
+   images themselves must be made freely available.
+4. The above acknowledgement and this license text must be included in any 
+   redistribution of the ROM images.
+
+For more information on this permission, see the original Amstrad statement:
+https://groups.google.com/g/comp.sys.amstrad.8bit/c/HtpBU2Bzv_U/m/HhNDSU3MksAJ
+
+

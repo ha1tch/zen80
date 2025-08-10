@@ -5,6 +5,11 @@ func (z *Z80) executeDD() int {
 	opcode := z.fetchByte()
 	// Increment R for the post-prefix opcode fetch (M1)
 	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
+	// Debug M1 trace for post-prefix fetch
+	if DEBUG_M1 && z.M1Hook != nil {
+		z.M1Hook(z.PC-1, opcode, "post-DD")
+	}
+
 	
 	// Handle special cases
 	switch opcode {
@@ -98,6 +103,11 @@ func (z *Z80) executeFD() int {
 	opcode := z.fetchByte()
 	// Increment R for the post-prefix opcode fetch (M1)
 	z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
+	// Debug M1 trace for post-prefix fetch
+	if DEBUG_M1 && z.M1Hook != nil {
+		z.M1Hook(z.PC-1, opcode, "post-FD")
+	}
+
 	
 	// Handle special cases
 	switch opcode {
