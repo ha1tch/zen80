@@ -159,38 +159,32 @@ Based on the lessons from the cycle-accurate emulation articles:
 
 ## Testing
 
-The test suite is organised in three tiers. The distinction matters: the
-instruction exercisers (ZEXDOC/ZEXALL) run for billions of cycles and are kept
-separate from the fast unit tests so day-to-day `go test` stays quick.
+The intended entry point for running the tests is the `runtest.sh` script. It
+sets up the ROM path and step budget the ROM-backed test needs, runs the fast
+unit tests, and skips the slow conformance exercisers by default:
+
+```bash
+./runtest.sh            # fast unit tests + ROM-backed opcode-coverage test
+./runtest.sh --zex      # the above, plus the ZEXDOC/ZEXALL exercisers
+```
+
+The test suite has three tiers, described below. The distinction matters
+because the ZEXDOC/ZEXALL exercisers run for billions of cycles and take
+minutes, so they are kept separate from the fast tests that `runtest.sh` runs
+by default.
 
 ### 1. Fast unit tests
 
-The bulk of the suite — per-instruction behaviour, flag derivations, timing,
-prefixes, interrupt modes. These run in well under a second:
-
-```bash
-go test ./z80/... ./pkg/...
-```
-
-Note that a bare `go test ./z80` will also pick up the ZEXDOC/ZEXALL harnesses
-(tier 3), which run to completion by default and take minutes. To run only the
-fast tests, skip them:
-
-```bash
-go test ./z80/... ./pkg/... -skip 'ZEX|ZEXALL'
-```
+The bulk of the suite: per-instruction behaviour, flag derivations, timing,
+prefixes, and interrupt modes (27 test files). These run in well under a
+second and are what `runtest.sh` runs by default.
 
 ### 2. ROM-backed opcode-coverage test
 
 `opcov_runtime_rom_test.go` executes a real 128K ROM to exercise opcode
 coverage at runtime. It needs a ROM path and a step budget, which `runtest.sh`
-sets up:
-
-```bash
-./runtest.sh
-```
-
-This points `Z80_ROM_PATH` at `rom/128-0.rom` and runs with a 50M-step budget.
+provides: it points `Z80_ROM_PATH` at `rom/128-0.rom` and runs with a 50M-step
+budget. (Run on its own it would skip for lack of those.)
 
 ### 3. ZEXDOC / ZEXALL conformance exercisers
 
@@ -208,12 +202,11 @@ A passing run prints each instruction group followed by `OK`. Console output
 is captured to `zexdoc.out` / `zexall.out`.
 
 These exercisers are gated behind environment variables so they do not run by
-accident as part of the fast suite. The runner scripts set them for you; the
-key ones are:
+accident. The runner scripts set them for you; the key ones are:
 
 | Variable | Meaning |
 |----------|---------|
-| `Z80_ZEX_STEPS` / `Z80_ZEXALL_STEPS` | Maximum CPU steps. **`0` means unlimited** (run to completion). The in-code default is ~2 billion, which is why a bare `go test` triggers a long run. |
+| `Z80_ZEX_STEPS` / `Z80_ZEXALL_STEPS` | Maximum CPU steps. **`0` means unlimited** (run to completion). |
 | `Z80_ZEX_OUTPUT` / `Z80_ZEXALL_OUTPUT` | File to capture console output to. |
 | `Z80_ZEX_PROGRESS_EVERY` | How often to print a progress line (in steps). |
 | `Z80_ZEX_SILENT_LIMIT` | Steps with no new output before the harness gives up. |
@@ -223,11 +216,25 @@ timeout does not cut them off. Run them on a real machine; in a heavily
 constrained or sandboxed environment they may appear to hang simply because
 they need the cycles to finish.
 
-### Everything
+### Running individual tests
 
-To run the complete suite the way the runner scripts do — fast tests, the
-ROM-backed test, and both exercisers — run `./runtest.sh` followed by
-`./zexdoc.sh` and `./zexall.sh`.
+To work on one instruction or behaviour, run a single test by name with `go
+test -run`. The pattern is anchored to a test function name:
+
+```bash
+# one test
+go test ./z80 -run '^TestDAA_AfterAdd_LowerNibbleOverflow$' -v
+
+# a related group (prefix match)
+go test ./z80 -run '^TestDAA' -v
+
+# everything except the slow exercisers
+go test ./z80 -run '^Test' -skip 'ZEX|ZEXALL'
+```
+
+`go test ./z80` with no `-run` will also pick up the ZEXDOC/ZEXALL exercisers
+(they default to billions of steps), so always pair a bare package run with
+`-skip 'ZEX|ZEXALL'` unless you mean to run them.
 
 ## Future Enhancements
 

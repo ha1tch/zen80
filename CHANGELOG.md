@@ -45,6 +45,8 @@ the existing zen80 codebase.
 
 ### Documentation
 
+- `runtest.sh` now skips the ZEXDOC/ZEXALL exercisers by default (they have
+  their own runners and take minutes); pass `--zex` to include them.
 - Expanded the README testing section to document the three test tiers (fast
   unit tests, the ROM-backed opcode-coverage test, and the ZEXDOC/ZEXALL
   conformance exercisers), including the environment variables that gate the
