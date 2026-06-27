@@ -21,7 +21,8 @@ func TestRotatesOnA_Basics(t *testing.T) {
 	c = mustStep(t, cpu); assertEq(t, c, 4, "RLA cycles")
 	// RRA
 	c = mustStep(t, cpu); assertEq(t, c, 4, "RRA cycles")
-	// For these ops, S/Z/PV are unaffected (per your core they are cleared back where needed).
-	// Quick sanity: ensure no unexpected setting of Z just by rotates
-	assertFlag(t, cpu, FlagZ, false, "Rotates shouldn't set Z spuriously")
+	// For these ops, S/Z/PV are unaffected. We started with F=0xFF (Z set),
+	// so Z must remain set after all four rotates -- RLCA/RRCA/RLA/RRA never
+	// touch S/Z/PV on real hardware.
+	assertFlag(t, cpu, FlagZ, true, "Rotates must leave Z unaffected (was set)")
 }
