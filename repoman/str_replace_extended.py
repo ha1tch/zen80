@@ -1,0 +1,1219 @@
+#!/usr/bin/env python3
+"""
+repoman/str_replace_extended.py — format-aware, journaled, base64-payload
+text substitution.
+
+Built to retire the failure class that direct str_replace/sed/awk
+substitution invites: content passing through a shell/argv quoting
+layer before it reaches disk, and edits landing without ever checking
+whether they broke the file's own syntax. Two recorded incidents in
+this project's own session history motivated it directly: a
+replacement's escape sequences (\\n, \\t) silently taken literally by
+bash's $'...' quoting because an apostrophe inside the content closed
+the quote early, and a duplicated line produced by a replacement whose
+own leading text overlapped its anchor span, applied faithfully by a
+tool with no way to notice.
+
+NEVER accepts search/replace text as CLI arguments. The payload is
+JSON, read from stdin or a file, with all search/replace content
+carried as base64 of raw UTF-8 bytes -- so a backtick, an apostrophe,
+a newline, or any other character with shell meaning can never be
+reinterpreted before it reaches this tool. Authoring path: a small
+Python driver that base64-encodes its own string literals and calls
+apply_payload() as a library, never a shell one-liner -- see this
+repository's own README.md for the recommended pattern.
+
+CLI:
+    python3 repoman/str_replace_extended.py apply [-|payload.json]
+    python3 repoman/str_replace_extended.py selftest
+
+Library:
+    from str_replace_extended import apply_payload
+    result = apply_payload(payload_dict)   # dict in, dict out, no I/O
+                                            # side effect if dry_run
+
+Payload schema (v1), one JSON document:
+
+{
+  "v": 1,
+  "atomic": true,                    # default true; see below
+  "defaults": {"syntax_check": true, "dry_run": false},
+  "ops": [
+    {
+      "op": "sub",                   # default "sub" if omitted
+      "file": "path/to/file",
+      "search_b64": "<base64 of raw utf-8 search text>",
+      "replace_b64": "<base64 of raw utf-8 replacement text>",
+      "expect": 1,                   # REQUIRED, no default -- exact
+                                      # match count, or the op refuses
+      "roles": ["go-code"],          # REQUIRED -- every match's
+                                      # classified role must be one of
+                                      # these, or the op refuses with
+                                      # the real census printed
+      "occurrences": null,           # null = all matches (requires a
+                                      # uniform role); [2, 4] = only
+                                      # those 1-indexed matches
+      "dry_run": false,              # overrides defaults.dry_run
+      "syntax_check": true           # overrides defaults.syntax_check
+    },
+    {
+      "op": "gen_markers",
+      "file": "path/to/file",
+      "count": 2
+    },
+    {
+      "op": "sweep_markers",
+      "file": "path/to/file"
+    }
+  ]
+}
+
+atomic (default true): when multiple ops are staged, either every op
+in the payload applies or none do. Ops targeting the same file apply
+in listed order against each other's in-memory result (mirroring
+ed.py's own per-file staged-write discipline); syntax-check runs once
+per touched file against its final staged content. atomic:false
+applies ops independently, collecting successes and failures
+separately -- use only when a later op's failure genuinely should not
+undo an earlier one.
+
+Refusal classes (op-level; exit 1 overall if any refuse under atomic
+mode, nothing written; each reason appears on stderr AND in the JSON
+result's own "error" field):
+  invalid-utf8-file        file does not decode as UTF-8
+  invalid-utf8-payload     search_b64/replace_b64 does not decode
+  normalization-mismatch   0 raw matches, but N would match under a
+                            different Unicode normalization form
+  count-mismatch           occurrences found != expect
+  role-mismatch            census is not a subset of the asserted
+                            roles; real census printed
+  delimiter-break          the edit changes the syntactic role of text
+                            immediately following it (a differential
+                            re-classification, not a full parser) --
+                            catches unescaped delimiters landing inside
+                            string/comment context
+  syntax-check-failed      post-apply format validator failed; the
+                            write is rolled back before this returns
+
+Every genuinely-applied op (not dry-run, not marker ops) is recorded
+in ed.py's own journal (.ed-journal.json) via ed.record() -- one undo
+history for both tools regardless of which one made a given edit.
+`ed.py mark` / `ed.py undo` / `ed.py log` all see these edits too.
+
+Markers (gen_markers / sweep_markers): for workflows that stage a
+change in two steps (insert a marker, later replace between markers),
+markers are generated by this tool, never supplied by the caller as
+literal text -- collision-checked against the live file content before
+being returned, using the U+27E6/U+27E7 MATHEMATICAL WHITE SQUARE
+BRACKET pair, valid UTF-8, printable, and not syntax in any format this
+tool validates. sweep_markers removes every marker this tool's own
+format ever produced, recognisable by a fixed prefix, so a marker
+generated in a crashed or abandoned session cannot silently survive.
+"""
+
+import argparse
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import unicodedata
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ed      # noqa: E402  -- reuse the journal: load_journal/record/save_journal
+import roles   # noqa: E402  -- reuse classify()/expand()
+
+MARKER_OPEN = "\u27e6"
+MARKER_CLOSE = "\u27e7"
+MARKER_RE = re.compile(re.escape(MARKER_OPEN) + r"RM:[a-z0-9]{16}" + re.escape(MARKER_CLOSE))
+
+# Sample-point strides for the delimiter-integrity differential check:
+# close together right after the edit (where most breaks show up
+# immediately), then wider strides further out (catching breaks that
+# only manifest once a later delimiter in the file is reached). Capped
+# total reach keeps cost bounded on very large files; a break beyond
+# the cap is a real gap in this heuristic, documented, not hidden.
+_PRECHECK_OFFSETS = [0, 1, 2, 5, 10, 20, 40, 80, 160, 320, 640, 1280, 2560, 5120]
+_PRECHECK_CAP = 20000
+
+
+class Refused(Exception):
+    """Carries a (class, message) pair; never raised past apply_payload."""
+    def __init__(self, cls: str, message: str):
+        self.cls = cls
+        self.message = message
+        super().__init__(f"{cls}: {message}")
+
+
+# ── payload decoding ────────────────────────────────────────────────
+
+def _b64_decode_utf8(s: str, what: str) -> str:
+    try:
+        raw = base64.b64decode(s, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise Refused("invalid-utf8-payload", f"{what}: not valid base64 ({e})")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Refused("invalid-utf8-payload", f"{what}: base64 decodes but is not valid UTF-8 ({e})")
+
+
+def _read_file_utf8(path: Path) -> str:
+    try:
+        raw = path.read_bytes()
+    except OSError as e:
+        raise Refused("invalid-utf8-file", f"{path}: cannot read ({e})")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Refused("invalid-utf8-file", f"{path}: not valid UTF-8 at byte {e.start} ({e})")
+
+
+# ── matching ─────────────────────────────────────────────────────────
+
+def _find_all(text: str, search: str) -> list:
+    out, i = [], text.find(search)
+    while i != -1:
+        out.append(i)
+        i = text.find(search, i + 1)
+    return out
+
+
+def _check_normalization(text: str, search: str) -> None:
+    """Only called when the raw search found zero matches. Reports,
+    without guessing which is 'correct', whether search would match
+    under NFC or NFD -- a real, recurring source of silent zero-match
+    confusion whenever content crossed a normalization boundary
+    (common with accented Spanish text and copy-paste from rendered
+    UIs, both live concerns for this project's own bilingual work)."""
+    hits = {}
+    for form in ("NFC", "NFD"):
+        norm_text = unicodedata.normalize(form, text)
+        norm_search = unicodedata.normalize(form, search)
+        n = len(_find_all(norm_text, norm_search))
+        if n:
+            hits[form] = n
+    if hits:
+        detail = ", ".join(f"{n} under {form}" for form, n in hits.items())
+        raise Refused("normalization-mismatch",
+                       f"0 raw matches, but {detail} -- the file and the search "
+                       "payload disagree on Unicode normalization form. Re-encode "
+                       "the search text from the file's own actual bytes rather "
+                       "than resubmitting; do not auto-normalize.")
+
+
+# ── delimiter-integrity precheck ────────────────────────────────────
+
+# Roles where being INSIDE at the start of an edit means the entire
+# replacement must stay inside throughout its own span -- escaping
+# and re-entering with a BALANCED pair of delimiters (e.g. Go's own
+# `hello" + injected + "` pattern) restores quote PARITY by the time
+# the tail is reached, so a check that only samples text AFTER the
+# replacement never sees it: both "before" and "after" are correctly
+# inside the string, and the injected code in between is invisible to
+# a check that never looks inside the replacement's own span. This is
+# the exact class of incident (`` `+expr+` `` inside `"..."`) already
+# on record in this project's own working agreement.
+_CONTENT_ROLES = {
+    "go-backtick-string", "go-dquote-string", "go-comment",
+    "python-string", "python-comment",
+    "json-string",
+    "yaml-string", "yaml-comment",
+    "shell-squote-string", "shell-dquote-string", "shell-backtick-string", "shell-comment",
+    "md-fence", "md-inline-code",
+}
+
+
+def _check_delimiter_integrity(path: Path, original: str, start: int, end: int,
+                                replacement: str) -> None:
+    """Two-part differential re-classification, not a full parser.
+
+    Part A (interior): only when the edit STARTS inside a content role
+    (a string/comment of some kind) -- every offset within the
+    replacement's own span must classify as that SAME role throughout.
+    Any deviation means the replacement contains an unescaped
+    delimiter that exits the enclosing construct, whether or not a
+    later delimiter in the same replacement re-enters it (a balanced
+    escape-and-reenter is exactly what this part exists to catch, and
+    exactly what an after-only check cannot see).
+
+    Part B (tail): for every edit regardless of starting role, the
+    role at increasing distances after the replacement must match the
+    role at the same distances after the original match -- catches an
+    UNbalanced delimiter (opened, never closed within the replacement)
+    that changes what everything downstream is classified as.
+
+    Not caught by either part, by design, and left to the post-apply
+    syntax validator instead: brace/paren/bracket balance, since no
+    role here tracks nesting depth, only string/comment state."""
+    new_text = original[:start] + replacement + original[end:]
+    new_point = start + len(replacement)
+    start_role = roles.classify(path, original, start)
+
+    if start_role in _CONTENT_ROLES:
+        interior_len = len(replacement)
+        stride = 1 if interior_len <= 2000 else max(1, interior_len // 2000)
+        for off in range(0, interior_len, stride):
+            role = roles.classify(path, new_text, start + off)
+            if role != start_role:
+                raise Refused(
+                    "delimiter-break",
+                    f"role at +{off} char(s) INTO the replacement changed from "
+                    f"{start_role!r} (the role the edit starts inside) to "
+                    f"{role!r} -- the replacement contains an unescaped "
+                    f"delimiter for this file's own format that exits the "
+                    f"enclosing {start_role}, whether or not it later "
+                    f"re-enters one. Escape the delimiter, or if exiting is "
+                    f"genuinely intended, split into separate ops so each "
+                    f"one's own starting role matches its own content.")
+
+    orig_len, new_len = len(original), len(new_text)
+    for off in _PRECHECK_OFFSETS:
+        if off > _PRECHECK_CAP:
+            break
+        oo, no = end + off, new_point + off
+        if oo >= orig_len or no >= new_len:
+            break
+        role_orig = roles.classify(path, original, oo)
+        role_new = roles.classify(path, new_text, no)
+        if role_orig != role_new:
+            raise Refused(
+                "delimiter-break",
+                f"role at +{off} char(s) after the edit changed from "
+                f"{role_orig!r} to {role_new!r} -- the replacement likely "
+                "contains an unescaped delimiter for this file's own format "
+                "that changes what encloses the text that follows. Escape it, "
+                "or if the role change is genuinely intended, make the edit "
+                "with dry_run first and inspect the diff by hand.")
+
+
+# ── syntax validators ───────────────────────────────────────────────
+
+def _validate_go(path: Path, text: str) -> tuple:
+    gofmt = _which_gofmt()
+    if gofmt is None:
+        return None, "gofmt not found on PATH -- syntax not independently verified"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".go", delete=False,
+                                      encoding="utf-8") as tf:
+        tf.write(text)
+        tmp = tf.name
+    try:
+        r = subprocess.run([gofmt, "-e", tmp], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return False, r.stderr.strip() or "gofmt reported a parse error"
+        return True, ""
+    finally:
+        os.unlink(tmp)
+
+
+def _which_gofmt():
+    import shutil
+    hit = shutil.which("gofmt")
+    if hit:
+        return hit
+    goroot = os.environ.get("GOROOT")
+    if goroot:
+        cand = Path(goroot) / "bin" / "gofmt"
+        if cand.is_file():
+            return str(cand)
+    # Common install locations, tried last: covers sessions where this
+    # tool runs in a bash_tool call that never sourced the exports a
+    # PREVIOUS call added to ~/.bashrc -- each such call is a fresh
+    # shell, so PATH/GOROOT set earlier in the same logical session
+    # does not automatically carry forward. A missing validator should
+    # never be the reason a real bug ships; check the obvious places
+    # before giving up and reporting "not independently verified".
+    for cand in (Path("/usr/local/go/bin/gofmt"), Path("/usr/lib/go/bin/gofmt")):
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
+def _validate_python(path: Path, text: str) -> tuple:
+    import ast
+    try:
+        ast.parse(text)
+        return True, ""
+    except SyntaxError as e:
+        return False, f"{e.__class__.__name__}: {e}"
+
+
+def _validate_json(path: Path, text: str) -> tuple:
+    try:
+        json.loads(text)
+        return True, ""
+    except json.JSONDecodeError as e:
+        return False, str(e)
+
+
+def _validate_yaml(path: Path, text: str) -> tuple:
+    try:
+        import yaml  # type: ignore
+    except ImportError:
+        return _validate_yaml_heuristic(text)
+    try:
+        yaml.safe_load(text)
+        return True, ""
+    except yaml.YAMLError as e:  # type: ignore
+        return False, str(e)
+
+
+def _validate_yaml_heuristic(text: str) -> tuple:
+    """PyYAML absent: reduced-confidence structural lint only. Result
+    is reported as "heuristic", never conflated with a real parse."""
+    if "\t" in text:
+        return "heuristic", "contains literal tab character(s) -- invalid in YAML indentation"
+    for opener, closer in (("{", "}"), ("[", "]")):
+        depth = 0
+        in_sq = in_dq = False
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if in_dq:
+                if c == "\\":
+                    i += 2
+                    continue
+                if c == '"':
+                    in_dq = False
+            elif in_sq:
+                if c == "'":
+                    in_sq = False
+            elif c == '"':
+                in_dq = True
+            elif c == "'":
+                in_sq = True
+            elif c == opener:
+                depth += 1
+            elif c == closer:
+                depth -= 1
+                if depth < 0:
+                    return False, f"unbalanced '{closer}' with no matching '{opener}'"
+            i += 1
+        if depth != 0:
+            return False, f"unbalanced '{opener}' -- {depth} unclosed"
+    return "heuristic", ""
+
+
+def _validate_markdown(path: Path, text: str) -> tuple:
+    fences = len(re.findall(r"^```", text, re.M))
+    if fences % 2 != 0:
+        return False, f"unbalanced code fences ({fences} occurrence(s) of ```` ``` ````)"
+    in_fence = False
+    table_widths = {}
+    for ln, line in enumerate(text.split("\n"), 1):
+        if re.match(r"^```", line):
+            in_fence = not in_fence
+            table_widths.pop("current", None)
+            continue
+        if in_fence:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            width = stripped.count("|")
+            if "current" not in table_widths:
+                table_widths["current"] = (width, ln)
+            elif re.match(r"^\|?[\s:|-]+\|?$", stripped):
+                continue  # separator row -- width can legitimately differ in dash count
+            elif width != table_widths["current"][0]:
+                first_ln = table_widths["current"][1]
+                return False, (f"table column count changes at line {ln} "
+                                f"({width} vs {table_widths['current'][0]} started at line {first_ln})")
+        else:
+            table_widths.pop("current", None)
+    return True, ""
+
+
+def _validate_shell(path: Path, text: str) -> tuple:
+    import shutil
+    bash = shutil.which("bash")
+    if bash is None:
+        return None, "bash not found on PATH -- syntax not independently verified"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False,
+                                      encoding="utf-8") as tf:
+        tf.write(text)
+        tmp = tf.name
+    try:
+        r = subprocess.run([bash, "-n", tmp], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return False, r.stderr.strip() or "bash -n reported a syntax error"
+        return True, ""
+    finally:
+        os.unlink(tmp)
+
+
+def _js_ts_balance_check(text: str) -> tuple:
+    """Single-pass structural check: (){}[]  balance, counted only in
+    code state -- never inside a string, comment, or template literal
+    -- plus confirms every string/comment/template opened is also
+    closed by EOF. Reuses the identical state-transition shape as
+    roles.py's own _js_scan (necessarily duplicated, not imported --
+    this project's own tools stay standalone scripts with no cross-
+    script dependency for one shared scan, the same choice
+    ed.py/roles.py already made for their own shared regex fragments),
+    but as ONE linear pass rather than roles.py's own per-offset
+    re-scan-from-zero shape -- calling classify() once per character
+    to build a whole-file check would be O(n^2), fine for roles.py's
+    own per-occurrence use but wrong for validating an entire file.
+
+    A substitution's own `${`/`}` delimiter pair is deliberately NOT
+    pushed onto the general bracket-balance stack -- only braces
+    GENUINELY nested inside the substitution's own code (object
+    literals, block bodies) are. The substitution's own nesting is
+    already tracked by the state stack's own `depth` counter; treating
+    it as a second, redundant bracket pair on the same stack would
+    require pushing on `${` and popping on the substitution's closing
+    `}`, and getting that pairing wrong was the exact class of bug
+    this function's own first draft had, caught by tracing the
+    (`inner ${1+1}`) case module roles.py's own selftest exercises
+    before this validator was trusted.
+    """
+    i, n = 0, len(text)
+    stack: list = []
+    balance: list = []
+    pairs = {")": "(", "}": "{", "]": "["}
+    while i < n:
+        c = text[i]
+        top = stack[-1] if stack else None
+        kind = top[0] if top else None
+        if kind is None or kind == "subst":
+            if text[i:i + 2] == "//":
+                stack.append(("lc",)); i += 2; continue
+            if text[i:i + 2] == "/*":
+                stack.append(("bc",)); i += 2; continue
+            if c in ("'", '"'):
+                stack.append(("str", c)); i += 1; continue
+            if c == "`":
+                stack.append(("tmpl",)); i += 1; continue
+            if kind == "subst":
+                depth = top[1]
+                if c == "{":
+                    stack[-1] = ("subst", depth + 1)
+                    balance.append("{")
+                    i += 1; continue
+                if c == "}":
+                    if depth == 1:
+                        stack.pop()  # closes the substitution itself; not on `balance`
+                    else:
+                        if not balance or balance[-1] != "{":
+                            return False, f"unmatched '}}' at byte {i}"
+                        balance.pop()
+                        stack[-1] = ("subst", depth - 1)
+                    i += 1; continue
+            if c in "([{":
+                balance.append(c); i += 1; continue
+            if c in ")]}":
+                if not balance or balance[-1] != pairs[c]:
+                    return False, f"unmatched '{c}' at byte {i}"
+                balance.pop(); i += 1; continue
+            i += 1; continue
+        if kind == "lc":
+            if c == "\n":
+                stack.pop()
+            i += 1; continue
+        if kind == "bc":
+            if text[i:i + 2] == "*/":
+                stack.pop(); i += 2; continue
+            i += 1; continue
+        if kind == "str":
+            delim = top[1]
+            if c == "\\":
+                i += 2; continue
+            if c == delim:
+                stack.pop()
+            i += 1; continue
+        if kind == "tmpl":
+            if c == "\\":
+                i += 2; continue
+            if c == "`":
+                stack.pop(); i += 1; continue
+            if text[i:i + 2] == "${":
+                stack.append(("subst", 1)); i += 2; continue
+            i += 1; continue
+    if stack:
+        kind = stack[-1][0]
+        if kind != "lc":  # an unterminated line comment is closed by EOF, fine
+            names = {"str": "an unterminated string",
+                      "tmpl": "an unterminated template literal",
+                      "bc": "an unterminated /* comment",
+                      "subst": "an unterminated ${...} substitution"}
+            return False, f"file ends inside {names[kind]}"
+    if balance:
+        return False, f"unbalanced '{balance[-1]}' -- {len(balance)} unclosed"
+    return True, ""
+
+
+def _validate_js(path: Path, text: str) -> tuple:
+    """.js/.mjs/.cjs (NOT .jsx): tries `node --check` first when Node
+    is on PATH -- a real parse, the closest equivalent here to
+    `gofmt -e`/`bash -n`. Falls back to the role-aware balance
+    heuristic (_js_ts_balance_check) when Node is absent. .jsx is
+    deliberately excluded from the `node --check` path even when Node
+    is present: plain Node cannot parse JSX at all (not valid
+    JavaScript without a build-step transform), so a real .jsx file
+    would be wrongly reported as a syntax error by the "real" check --
+    worse than not checking, since it reports False confidently."""
+    if path.suffix.lower() in (".js", ".mjs", ".cjs"):
+        import shutil
+        node = shutil.which("node")
+        if node is not None:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False,
+                                              encoding="utf-8") as tf:
+                tf.write(text)
+                tmp = tf.name
+            try:
+                r = subprocess.run([node, "--check", tmp], capture_output=True,
+                                    text=True, timeout=30)
+                if r.returncode != 0:
+                    return False, r.stderr.strip() or "node --check reported a syntax error"
+                return True, ""
+            finally:
+                os.unlink(tmp)
+    ok, detail = _js_ts_balance_check(text)
+    return ("heuristic", detail) if ok is True else (ok, detail)
+
+
+def _validate_ts(path: Path, text: str) -> tuple:
+    """.ts/.tsx: always heuristic. No universally-available tool
+    parses TypeScript's own type-level syntax (interfaces, generics,
+    type annotations) the way gofmt/bash/python parse their own
+    formats -- `tsc` requires a TypeScript install this tool cannot
+    assume, and plain `node --check` would wrongly reject valid TS
+    syntax it cannot itself parse (the same JSX problem _validate_js
+    avoids, plus TS's own type syntax on top). Same role-aware balance
+    heuristic as .jsx's own fallback path."""
+    ok, detail = _js_ts_balance_check(text)
+    return ("heuristic", detail) if ok is True else (ok, detail)
+
+
+def _validate_css(path: Path, text: str) -> tuple:
+    """Always heuristic: no standard CSS-aware parser is reliably
+    available to shell out to, the way gofmt/bash/python's own
+    interpreter are. Checks brace balance (counted only outside
+    strings/comments) and that no string/comment is left open at EOF
+    -- structural sanity, not a real CSS grammar check, the same
+    granularity as this project's own YAML heuristic fallback."""
+    i, n = 0, len(text)
+    state = None
+    balance = 0
+    while i < n:
+        c = text[i]
+        if state is None:
+            if text[i:i + 2] == "/*":
+                state = "comment"; i += 2; continue
+            if c in ("'", '"'):
+                state = ("str", c); i += 1; continue
+            if c == "{":
+                balance += 1; i += 1; continue
+            if c == "}":
+                balance -= 1
+                if balance < 0:
+                    return False, f"unmatched '}}' at byte {i}"
+                i += 1; continue
+            i += 1; continue
+        if state == "comment":
+            if text[i:i + 2] == "*/":
+                state = None; i += 2; continue
+            i += 1; continue
+        _, delim = state
+        if c == "\\":
+            i += 2; continue
+        if c == delim:
+            state = None
+        i += 1; continue
+    if state == "comment":
+        return False, "file ends inside an unterminated /* comment"
+    if isinstance(state, tuple):
+        return False, "file ends inside an unterminated string"
+    if balance != 0:
+        return False, (f"unbalanced '{{' -- {balance} unclosed" if balance > 0
+                        else f"{-balance} extra, unmatched '}}'")
+    return "heuristic", ""
+
+
+_VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input",
+                   "link", "meta", "param", "source", "track", "wbr"}
+_TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)\b([^>]*)>")
+
+
+def _validate_html(path: Path, text: str) -> tuple:
+    """Always heuristic, like CSS: no standard HTML5-aware parser is
+    reliably available to shell out to. Checks tag-open/tag-close
+    balance (void elements and self-closing '/>' tags correctly
+    excluded from the stack) -- NOT a real HTML5 parser, does not
+    validate nesting rules a real parser auto-corrects (e.g. a stray
+    <p> inside another <p>), only that every tag needing a close has
+    one and every closing tag matches what's actually open.
+
+    <script>/<style> BODY spans are excluded from tag-matching
+    entirely (reusing roles.py's own _html_embedded_spans) -- their
+    content is not HTML, and a JS comparison like `if (a < b)` would
+    otherwise false-positive match this validator's own tag regex as
+    if `<b)` were the start of a tag. The opening/closing <script> and
+    <style> TAGS themselves are still matched normally; only what is
+    between them is skipped."""
+    embedded = roles._html_embedded_spans(text)
+
+    def _in_embedded_body(pos: int) -> bool:
+        return any(s <= pos < e for s, e, _ in embedded)
+
+    stack: list = []
+    for m in _TAG_RE.finditer(text):
+        if _in_embedded_body(m.start()):
+            continue
+        name = m.group(2).lower()
+        closing = m.group(1) == "/"
+        self_closing = m.group(3).rstrip().endswith("/")
+        if closing:
+            if not stack:
+                return False, f"closing </{name}> with nothing open"
+            if stack[-1] != name:
+                return False, f"</{name}> does not match open <{stack[-1]}>"
+            stack.pop()
+        elif name in _VOID_ELEMENTS or self_closing:
+            pass
+        else:
+            stack.append(name)
+    if stack:
+        return False, f"unclosed tag(s): {', '.join(reversed(stack))}"
+    return "heuristic", ""
+
+
+_VALIDATORS = {
+    ".go": _validate_go,
+    ".py": _validate_python,
+    ".json": _validate_json,
+    ".yml": _validate_yaml, ".yaml": _validate_yaml,
+    ".md": _validate_markdown, ".markdown": _validate_markdown,
+    ".sh": _validate_shell, ".bash": _validate_shell,
+    ".js": _validate_js, ".mjs": _validate_js, ".cjs": _validate_js, ".jsx": _validate_js,
+    ".ts": _validate_ts, ".tsx": _validate_ts,
+    ".css": _validate_css,
+    ".html": _validate_html, ".htm": _validate_html,
+}
+
+
+def validate_syntax(path: Path, text: str) -> dict:
+    """Returns {"validated": True|False|"heuristic"|None, "detail": str}.
+    None means: no validator for this format, nothing checked, and the
+    caller should not read that as a pass."""
+    fn = _VALIDATORS.get(path.suffix.lower())
+    if fn is None:
+        return {"validated": None, "detail": f"no syntax validator registered for {path.suffix or '(no extension)'}"}
+    ok, detail = fn(path, text)
+    return {"validated": ok, "detail": detail}
+
+
+# ── markers ──────────────────────────────────────────────────────────
+
+def gen_marker(existing_text: str) -> str:
+    while True:
+        token = hashlib.sha256(uuid.uuid4().bytes).digest()
+        b32 = base64.b32encode(token).decode().rstrip("=").lower()[:16]
+        marker = f"{MARKER_OPEN}RM:{b32}{MARKER_CLOSE}"
+        if marker not in existing_text:
+            return marker
+
+
+# ── single-op staging (in-memory; no I/O beyond initial read) ───────
+
+def _stage_sub_op(op: dict, defaults: dict, current_text: dict, path_cache: dict) -> dict:
+    """Mutates current_text[file] in place on success. Raises Refused
+    on any refusal class. Returns a per-op result dict (pre-write)."""
+    file_ = op["file"]
+    path = path_cache.setdefault(file_, Path(file_))
+    if file_ not in current_text:
+        current_text[file_] = _read_file_utf8(path)
+    text = current_text[file_]
+
+    if "search_b64" not in op or "replace_b64" not in op:
+        raise Refused("invalid-utf8-payload", f"{file_}: op missing search_b64/replace_b64")
+    search = _b64_decode_utf8(op["search_b64"], f"{file_}: search_b64")
+    replace = _b64_decode_utf8(op["replace_b64"], f"{file_}: replace_b64")
+
+    if "expect" not in op:
+        raise Refused("count-mismatch", f"{file_}: 'expect' is required, no default")
+    if "roles" not in op or not op["roles"]:
+        raise Refused("role-mismatch", f"{file_}: 'roles' is required, no default -- "
+                                        "name every role you expect this match to occupy")
+    expect = op["expect"]
+    asserted_roles = set(op["roles"])
+
+    offsets = _find_all(text, search)
+    if not offsets:
+        _check_normalization(text, search)  # raises if it finds a form mismatch
+        raise Refused("count-mismatch", f"{file_}: 0 occurrence(s) found, expected {expect}")
+
+    occ_select = op.get("occurrences")
+    if occ_select is not None:
+        selected = []
+        for idx in occ_select:
+            if idx < 1 or idx > len(offsets):
+                raise Refused("count-mismatch",
+                               f"{file_}: occurrences index {idx} out of range "
+                               f"(1..{len(offsets)} found)")
+            selected.append(offsets[idx - 1])
+        offsets = selected
+
+    if len(offsets) != expect:
+        raise Refused("count-mismatch",
+                       f"{file_}: found {len(offsets)} occurrence(s) (after any "
+                       f"'occurrences' filter), expected {expect}. Nothing written.")
+
+    census = {}
+    for off in offsets:
+        role = roles.classify(path, text, off)
+        census[role] = census.get(role, 0) + 1
+    if not set(census).issubset(asserted_roles):
+        raise Refused("role-mismatch",
+                       f"{file_}: real role census {census} is not a subset of "
+                       f"asserted roles {sorted(asserted_roles)}. Split into one "
+                       "op per role, or correct the 'roles' list if the census "
+                       "is actually what you intended.")
+
+    # Apply in descending offset order so earlier offsets stay valid;
+    # delimiter-integrity checked per-occurrence against the ORIGINAL
+    # text/offsets (matches ed.py cmd_sub's own staging discipline).
+    for off in sorted(offsets, reverse=True):
+        _check_delimiter_integrity(path, text, off, off + len(search), replace)
+        text = text[:off] + replace + text[off + len(search):]
+
+    current_text[file_] = text
+    return {
+        "op": "sub", "file": file_, "matched": len(offsets),
+        "roles": census, "applied": True,
+    }
+
+
+def _stage_marker_op(op: dict, current_text: dict, path_cache: dict, marker_log: list) -> dict:
+    file_ = op["file"]
+    path = path_cache.setdefault(file_, Path(file_))
+    if file_ not in current_text:
+        current_text[file_] = _read_file_utf8(path)
+    text = current_text[file_]
+
+    if op["op"] == "gen_markers":
+        count = op.get("count", 1)
+        made = []
+        for _ in range(count):
+            m = gen_marker(text + "".join(made))
+            made.append(m)
+        marker_log.extend(made)
+        return {"op": "gen_markers", "file": file_, "markers": made, "applied": False}
+
+    if op["op"] == "sweep_markers":
+        new_text, n = MARKER_RE.subn("", text)
+        current_text[file_] = new_text
+        return {"op": "sweep_markers", "file": file_, "removed": n, "applied": n > 0}
+
+    raise Refused("invalid-utf8-payload", f"unknown op {op.get('op')!r}")
+
+
+# ── top-level payload application ───────────────────────────────────
+
+def apply_payload(payload: dict) -> dict:
+    """dict in, dict out. No filesystem writes if every relevant op is
+    dry_run (marker ops other than sweep never write on their own).
+    Under atomic (default True): nothing is written unless every op
+    stages cleanly."""
+    if payload.get("v") != 1:
+        return {"ok": False, "error": {"cls": "invalid-utf8-payload",
+                                        "message": f"unsupported payload version {payload.get('v')!r}, expected 1"}}
+    defaults = payload.get("defaults", {})
+    atomic = payload.get("atomic", True)
+    ops = payload.get("ops", [])
+
+    current_text = {}   # file -> staged in-memory text
+    path_cache = {}
+    marker_log = []
+    op_results = []
+    dry_run_files = set()
+
+    try:
+        for op in ops:
+            kind = op.get("op", "sub")
+            eff_dry = op.get("dry_run", defaults.get("dry_run", False))
+            if kind == "sub":
+                res = _stage_sub_op(op, defaults, current_text, path_cache)
+                if eff_dry:
+                    dry_run_files.add(op["file"])
+                op_results.append(res)
+            elif kind in ("gen_markers", "sweep_markers"):
+                res = _stage_marker_op(op, current_text, path_cache, marker_log)
+                op_results.append(res)
+            else:
+                raise Refused("invalid-utf8-payload", f"unknown op kind {kind!r}")
+    except Refused as r:
+        return {"ok": False, "error": {"cls": r.cls, "message": r.message},
+                "ops_completed_before_refusal": len(op_results)}
+
+    # Syntax-check every touched, non-dry-run file against its final
+    # staged content -- once per file, not once per op.
+    syntax_results = {}
+    for file_, text in current_text.items():
+        if file_ in dry_run_files:
+            continue
+        path = path_cache[file_]
+        eff_check = defaults.get("syntax_check", True)
+        for op in ops:
+            if op.get("file") == file_ and "syntax_check" in op:
+                eff_check = op["syntax_check"]
+        if not eff_check:
+            continue
+        v = validate_syntax(path, text)
+        syntax_results[file_] = v
+        if v["validated"] is False:
+            if atomic:
+                return {"ok": False,
+                        "error": {"cls": "syntax-check-failed",
+                                  "message": f"{file_}: {v['detail']}"},
+                        "syntax_results": syntax_results}
+            # non-atomic: drop this file from the write set, keep others
+            del current_text[file_]
+
+    diffs = {}
+    for file_, text in current_text.items():
+        if file_ in dry_run_files:
+            orig = _read_file_utf8(path_cache[file_])
+            diffs[file_] = _unified_diff(orig, text, file_)
+
+    written = []
+    if not payload.get("dry_run_all"):
+        journal_edits = []
+        for file_, text in current_text.items():
+            if file_ in dry_run_files:
+                continue
+            path = path_cache[file_]
+            orig = _read_file_utf8(path)
+            if orig == text:
+                continue
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+            written.append(file_)
+            journal_edits.append({"file": str(path), "offset": 0, "old": orig, "new": text})
+        if journal_edits:
+            j = ed.load_journal()
+            label = f"str_replace_extended ({len(journal_edits)} file(s))"
+            ed.record(j, journal_edits, label)
+
+    return {
+        "ok": True,
+        "ops": op_results,
+        "written": written,
+        "dry_run_diffs": diffs,
+        "syntax_results": syntax_results,
+        "markers": marker_log,
+    }
+
+
+def _unified_diff(a: str, b: str, name: str) -> str:
+    import difflib
+    return "".join(difflib.unified_diff(
+        a.splitlines(keepends=True), b.splitlines(keepends=True),
+        fromfile=f"a/{name}", tofile=f"b/{name}"))
+
+
+# ── CLI ──────────────────────────────────────────────────────────────
+
+def cmd_apply(args) -> int:
+    raw = sys.stdin.read() if args.payload == "-" else Path(args.payload).read_text(encoding="utf-8")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"REFUSED: payload is not valid JSON: {e}", file=sys.stderr)
+        return 1
+    result = apply_payload(payload)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if not result.get("ok"):
+        print(f"REFUSED: {result['error']['cls']}: {result['error']['message']}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# ── selftest ─────────────────────────────────────────────────────────
+
+def _b64(s: str) -> str:
+    return base64.b64encode(s.encode("utf-8")).decode("ascii")
+
+
+def cmd_selftest(_args) -> int:
+    import shutil as _shutil
+    with tempfile.TemporaryDirectory() as d:
+        os.chdir(d)
+        results = []
+
+        # 1. Basic sub: count + role match, applies, journals.
+        Path("t.go").write_text('package main\n\nfunc f() {\n\tx := 1\n\t_ = x\n}\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.go", "search_b64": _b64("x := 1"), "replace_b64": _b64("x := 2"),
+            "expect": 1, "roles": ["go-code"],
+        }]})
+        results.append(("1 basic sub applies", r["ok"] and "x := 2" in Path("t.go").read_text()))
+
+        # 2. Count mismatch refuses, writes nothing.
+        Path("t2.go").write_text('package main\n\nvar a = 1\nvar b = 1\n', encoding="utf-8")
+        before = Path("t2.go").read_text()
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t2.go", "search_b64": _b64("= 1"), "replace_b64": _b64("= 2"),
+            "expect": 1, "roles": ["go-code"],
+        }]})
+        results.append(("2 count-mismatch refuses", not r["ok"] and r["error"]["cls"] == "count-mismatch"
+                         and Path("t2.go").read_text() == before))
+
+        # 3. Missing 'expect' or 'roles' refuses (no silent default).
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.go", "search_b64": _b64("_ = x"), "replace_b64": _b64("_ = y"),
+        }]})
+        results.append(("3 missing expect/roles refuses", not r["ok"]))
+
+        # 4. Role mismatch: search spans code + comment -> refuses with real census.
+        Path("t3.go").write_text('package main\n\n// alpha note\nvar alpha = 1\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t3.go", "search_b64": _b64("alpha"), "replace_b64": _b64("beta"),
+            "expect": 2, "roles": ["go-code"],
+        }]})
+        results.append(("4 role-mismatch refuses w/ census",
+                         not r["ok"] and r["error"]["cls"] == "role-mismatch"
+                         and "go-comment" in r["error"]["message"]))
+
+        # 5. Delimiter-break: replacement injects an unescaped closing
+        #    quote into a Go double-quoted string -> refuses.
+        Path("t4.go").write_text('package main\n\nvar s = "hello world"\nvar n = 1\n', encoding="utf-8")
+        before4 = Path("t4.go").read_text()
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t4.go", "search_b64": _b64("hello"), "replace_b64": _b64('hello" + injected + "'),
+            "expect": 1, "roles": ["go-dquote-string"],
+        }]})
+        results.append(("5 delimiter-break refuses, writes nothing",
+                         not r["ok"] and r["error"]["cls"] == "delimiter-break"
+                         and Path("t4.go").read_text() == before4))
+
+        # 6. Syntax-check-failed: a structurally valid single op that
+        #    still leaves the file syntactically broken -> rolled back.
+        Path("t5.go").write_text('package main\n\nfunc f() {\n\treturn 1\n}\n', encoding="utf-8")
+        before5 = Path("t5.go").read_text()
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t5.go", "search_b64": _b64("return 1\n}"), "replace_b64": _b64("return 1"),
+            "expect": 1, "roles": ["go-code"],
+        }]})
+        gofmt_present = _which_gofmt() is not None
+        if gofmt_present:
+            results.append(("6 syntax-check-failed rolls back",
+                             not r["ok"] and r["error"]["cls"] == "syntax-check-failed"
+                             and Path("t5.go").read_text() == before5))
+        else:
+            results.append(("6 syntax-check (skipped, no gofmt on PATH)", True))
+
+        # 7. dry_run changes nothing on disk but returns a diff.
+        Path("t6.go").write_text('package main\n\nvar q = 1\n', encoding="utf-8")
+        before6 = Path("t6.go").read_text()
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t6.go", "search_b64": _b64("q = 1"), "replace_b64": _b64("q = 2"),
+            "expect": 1, "roles": ["go-code"], "dry_run": True,
+        }]})
+        results.append(("7 dry_run writes nothing, returns diff",
+                         r["ok"] and Path("t6.go").read_text() == before6
+                         and "t6.go" in r["dry_run_diffs"] and "q = 2" in r["dry_run_diffs"]["t6.go"]))
+
+        # 8. Marker generation: collision-checked, unique, sweeps cleanly.
+        Path("t7.md").write_text("before\nafter\n", encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{"op": "gen_markers", "file": "t7.md", "count": 2}]})
+        m1, m2 = r["markers"]
+        results.append(("8a markers unique", m1 != m2 and m1.startswith(MARKER_OPEN + "RM:")))
+        r2 = apply_payload({"v": 1, "ops": [
+            {"op": "sub", "file": "t7.md", "search_b64": _b64("before"),
+             "replace_b64": _b64(f"before{m1}mid{m2}after-marker"), "expect": 1, "roles": ["md-prose"]},
+            {"op": "sweep_markers", "file": "t7.md"},
+        ]})
+        results.append(("8b sweep removes both markers",
+                         r2["ok"] and MARKER_OPEN not in Path("t7.md").read_text()))
+
+        # 9. Normalization mismatch: raw search finds 0, NFC/NFD would
+        #    find the accented text -- refuses with a clear diagnostic,
+        #    never silently auto-normalizes.
+        combining = "e\u0301lan"        # e + combining acute (NFD-ish)
+        precomposed = "\u00e9lan"       # single precomposed é (NFC)
+        Path("t8.md").write_text(f"word: {precomposed}\n", encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t8.md", "search_b64": _b64(combining), "replace_b64": _b64("elan"),
+            "expect": 1, "roles": ["md-prose"],
+        }]})
+        results.append(("9 normalization-mismatch detected, not silently normalized",
+                         not r["ok"] and r["error"]["cls"] == "normalization-mismatch"))
+
+        # 10. New format classifiers wired: python/json/yaml/shell all
+        #     produce a clean single-role sub with a passing syntax check.
+        Path("t.py").write_text('x = 1\ny = 2\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.py", "search_b64": _b64("x = 1"), "replace_b64": _b64("x = 3"),
+            "expect": 1, "roles": ["python-code"],
+        }]})
+        results.append(("10a python sub + ast validate", r["ok"] and r["syntax_results"]["t.py"]["validated"] is True))
+
+        Path("t.json").write_text('{"a": 1, "b": 2}\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.json", "search_b64": _b64('"a": 1'), "replace_b64": _b64('"a": 3'),
+            "expect": 1, "roles": ["json-code"],
+        }]})
+        results.append(("10b json sub + validate", r["ok"] and r["syntax_results"]["t.json"]["validated"] is True))
+
+        Path("t.yaml").write_text('a: 1\nb: 2\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.yaml", "search_b64": _b64("a: 1"), "replace_b64": _b64("a: 3"),
+            "expect": 1, "roles": ["yaml-code"],
+        }]})
+        results.append(("10c yaml sub + validate", r["ok"] and r["syntax_results"]["t.yaml"]["validated"] in (True, "heuristic")))
+
+        Path("t.sh").write_text('#!/bin/bash\necho "a"\necho "b"\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.sh", "search_b64": _b64('echo "a"'), "replace_b64": _b64('echo "c"'),
+            "expect": 1, "roles": ["shell-code"],
+        }]})
+        bash_present = _shutil.which("bash") is not None
+        if bash_present:
+            results.append(("10d shell sub + bash -n validate", r["ok"] and r["syntax_results"]["t.sh"]["validated"] is True))
+        else:
+            results.append(("10d shell sub (skipped, no bash on PATH)", True))
+
+        Path("t.js").write_text('function f(x) {\n  return x + 1;\n}\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.js", "search_b64": _b64("return x + 1"), "replace_b64": _b64("return x + 2"),
+            "expect": 1, "roles": ["js-code"],
+        }]})
+        node_present = _shutil.which("node") is not None
+        if node_present:
+            results.append(("10e js sub + node --check validate", r["ok"] and r["syntax_results"]["t.js"]["validated"] is True))
+        else:
+            results.append(("10e js sub + heuristic validate (no node on PATH)",
+                             r["ok"] and r["syntax_results"]["t.js"]["validated"] == "heuristic"))
+
+        Path("t.ts").write_text('interface Foo { a: string; }\nfunction f(x: Foo): string {\n  return x.a;\n}\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.ts", "search_b64": _b64("return x.a"), "replace_b64": _b64("return x.a + x.a"),
+            "expect": 1, "roles": ["ts-code"],
+        }]})
+        results.append(("10f ts sub + heuristic validate (always heuristic -- see _validate_ts)",
+                         r["ok"] and r["syntax_results"]["t.ts"]["validated"] == "heuristic"))
+
+        Path("t.css").write_text('.a {\n  color: red;\n}\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.css", "search_b64": _b64("color: red"), "replace_b64": _b64("color: blue"),
+            "expect": 1, "roles": ["css-code"],
+        }]})
+        results.append(("10g css sub + heuristic validate", r["ok"] and r["syntax_results"]["t.css"]["validated"] == "heuristic"))
+
+        Path("t.html").write_text('<div class="a">\n  <p>hello</p>\n</div>\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t.html", "search_b64": _b64("hello"), "replace_b64": _b64("goodbye"),
+            "expect": 1, "roles": ["html-text"],
+        }]})
+        results.append(("10h html sub + heuristic validate", r["ok"] and r["syntax_results"]["t.html"]["validated"] == "heuristic"))
+
+        # 10i. The hard case, proven end to end, not just via the
+        # validator: a substitution INSIDE a nested template literal's
+        # own ${...} substitution must be correctly role-classified as
+        # js-code (not js-template-string, and not silently landing in
+        # the wrong nesting level) -- this is exactly the failure mode
+        # a naive single-state scanner (as every other classifier here
+        # uses) would get wrong, which is why _js_scan uses a state
+        # stack instead. See roles.py's own _js_scan docstring.
+        Path("t2.js").write_text(
+            'const x = `outer ${`inner ${1 + 1}`} tail`;\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t2.js", "search_b64": _b64("1 + 1"), "replace_b64": _b64("2 + 2"),
+            "expect": 1, "roles": ["js-code"],
+        }]})
+        results.append(("10i nested template-literal substitution correctly role-classified",
+                         r["ok"] and "2 + 2" in Path("t2.js").read_text()))
+        r_wrong_role = apply_payload({"v": 1, "ops": [{
+            "file": "t2.js", "search_b64": _b64("tail"), "replace_b64": _b64("end"),
+            "expect": 1, "roles": ["js-code"], "dry_run": True,
+        }]})
+        results.append(("10j outer template text correctly NOT js-code (role-mismatch refuses)",
+                         not r_wrong_role["ok"] and r_wrong_role["error"]["cls"] == "role-mismatch"))
+
+        # 11. Journal integration: an applied op is undoable via ed.py.
+        Path("t9.go").write_text('package main\n\nvar k = 1\n', encoding="utf-8")
+        apply_payload({"v": 1, "ops": [{
+            "file": "t9.go", "search_b64": _b64("k = 1"), "replace_b64": _b64("k = 9"),
+            "expect": 1, "roles": ["go-code"],
+        }]})
+        import subprocess as _sp
+        me_ed = str(Path(__file__).resolve().parent / "ed.py")
+        r = _sp.run([sys.executable, me_ed, "undo"], capture_output=True, text=True)
+        results.append(("11 ed.py undo reverts a str_replace_extended edit",
+                         r.returncode == 0 and "k = 1" in Path("t9.go").read_text()))
+
+        # 12. atomic batch: a later op's refusal rolls back an earlier
+        #     op's already-staged change in the SAME file.
+        Path("t10.go").write_text('package main\n\nvar m = 1\nvar n = 1\n', encoding="utf-8")
+        before10 = Path("t10.go").read_text()
+        r = apply_payload({"v": 1, "atomic": True, "ops": [
+            {"file": "t10.go", "search_b64": _b64("m = 1"), "replace_b64": _b64("m = 2"),
+             "expect": 1, "roles": ["go-code"]},
+            {"file": "t10.go", "search_b64": _b64("n = 1"), "replace_b64": _b64("n = 1\n}"),
+             "expect": 1, "roles": ["go-code"]},  # breaks Go syntax
+        ]})
+        results.append(("12 atomic batch rolls back on later syntax failure",
+                         not r["ok"] and Path("t10.go").read_text() == before10))
+
+        # 13. False-positive guard: inserting a COMPLETE, self-balanced
+        #     string literal into code is legitimate and must NOT be
+        #     refused -- Part A only applies when the edit starts
+        #     inside a content role, not when it starts in code and
+        #     the replacement happens to contain a balanced literal.
+        Path("t11.go").write_text('package main\n\nfunc f() {\n\t_ = 1\n}\n', encoding="utf-8")
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t11.go", "search_b64": _b64("_ = 1"),
+            "replace_b64": _b64('_ = "a new literal" + "and another"'),
+            "expect": 1, "roles": ["go-code"],
+        }]})
+        results.append(("13 legitimate nested literal insertion NOT refused",
+                         r["ok"] and '"a new literal"' in Path("t11.go").read_text()))
+
+        # 14. Direct regression test for the incident that motivated
+        #     this whole tool: a replacement containing real tab/
+        #     newline bytes and an apostrophe must land byte-exact,
+        #     never reinterpreted as escape sequences or truncated by
+        #     shell quoting -- because it never touches a shell at all.
+        Path("t12.go").write_text('package main\n\nvar x = 1\n', encoding="utf-8")
+        tricky = "// XOT192's own re-check, Aggregate's own comment\nvar y = 2\n\tvar z = 3"
+        r = apply_payload({"v": 1, "ops": [{
+            "file": "t12.go", "search_b64": _b64("var x = 1"), "replace_b64": _b64(tricky),
+            "expect": 1, "roles": ["go-code"], "syntax_check": False,
+        }]})
+        on_disk = Path("t12.go").read_text(encoding="utf-8")
+        results.append(("14 tabs/newlines/apostrophes land byte-exact, no shell reinterpretation",
+                         r["ok"] and tricky in on_disk and "\\n" not in on_disk and "\\t" not in on_disk))
+
+    print("str_replace_extended selftest:")
+    all_ok = True
+    for name, ok in results:
+        print(f"  {'OK ' if ok else 'FAIL'}  {name}")
+        all_ok &= ok
+    print(f"{'ALL GREEN' if all_ok else 'FAILURES ABOVE'} ({len(results)} paths)")
+    return 0 if all_ok else 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="format-aware journaled text substitution")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("apply")
+    p.add_argument("payload", help="'-' for stdin, or a path to a JSON payload file")
+    sub.add_parser("selftest")
+    args = ap.parse_args()
+    return {"apply": cmd_apply, "selftest": cmd_selftest}[args.cmd](args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(0)

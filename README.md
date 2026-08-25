@@ -170,8 +170,9 @@ unit tests, and skips the slow conformance exercisers by default:
 
 The test suite has three tiers, described below. The distinction matters
 because the ZEXDOC/ZEXALL exercisers run for billions of cycles and take
-minutes, so they are kept separate from the fast tests that `runtest.sh` runs
-by default.
+30-60+ minutes, so they are kept separate from the fast tests that
+`runtest.sh` runs by default -- not run routinely, and never expected to
+complete within a CI job or a sandboxed session.
 
 ### 1. Fast unit tests
 
@@ -191,7 +192,11 @@ budget. (Run on its own it would skip for lack of those.)
 These are the standard Z80 instruction exercisers (the same ones used to
 validate real hardware emulators), run under a small CP/M BDOS shim. ZEXDOC
 checks documented flag behaviour; ZEXALL additionally checks the undocumented
-flag bits. Each runs to completion and **takes several minutes**:
+flag bits. Each runs to completion and **takes 30-60+ minutes** -- this is
+not a hang or a bug, it genuinely runs that long, exercising every opcode
+across its full input space. Not something a CI run or a sandboxed session
+should ever be expected to complete; run these deliberately, locally, when
+actually verifying opcode correctness after a change to core execution:
 
 ```bash
 ./zexdoc.sh     # documented-flags exerciser
