@@ -25,8 +25,17 @@ func (z *Z80) executeCB() int {
 		// (HL) operand
 		addr = z.HL()
 		val = z.memRead(addr)
-		// FIX: Set WZ for proper flag handling
-		z.WZ = addr + 1
+		// Deliberately NO WZ update here: plain CB operations on (HL)
+		// leave MEMPTR untouched on real hardware -- that staleness is
+		// precisely why BIT n,(HL)'s undocumented X/Y flags reveal the
+		// residue of earlier instructions. A previous version set
+		// WZ=HL+1 at this point, which made those flags a function of
+		// HL instead of history; Batman's Speedlock stage-3 folds this
+		// exact residue into its decryption keystream, and the
+		// refreshed WZ inverted one keystream bit, corrupting the
+		// decrypted loader and crashing the machine into a reset.
+		// (DDCB/FDCB indexed forms DO set WZ=IX/IY+d; that behaviour
+		// lives in prefix_ddfd.go and is unchanged.)
 		cycles = 15 // CB operations on (HL) take longer
 	} else {
 		// Register operand

@@ -415,9 +415,12 @@ func (cpu *Z80) executeBlock3(opcode uint8, y, z, p, q uint8) int {
 
 	case 2: // JP cc,nn
 		addr := cpu.fetchWord()
+		// WZ = addr always, taken or not: on real hardware WZ is set by
+		// the operand fetch itself, not by the branch. A regression
+		// left WZ stale on the not-taken path.
+		cpu.WZ = addr
 		if cpu.testCondition(y) {
 			cpu.PC = addr
-			cpu.WZ = addr
 			return 10
 		}
 		return 10
@@ -463,10 +466,12 @@ func (cpu *Z80) executeBlock3(opcode uint8, y, z, p, q uint8) int {
 
 	case 4: // CALL cc,nn
 		addr := cpu.fetchWord()
+		// WZ = addr always, taken or not -- same operand-fetch rule as
+		// JP cc,nn above.
+		cpu.WZ = addr
 		if cpu.testCondition(y) {
 			cpu.push(cpu.PC)
 			cpu.PC = addr
-			cpu.WZ = addr
 			return 17
 		}
 		return 10

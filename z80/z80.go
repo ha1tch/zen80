@@ -239,7 +239,31 @@ func (z *Z80) Reset() {
 }
 
 // Step executes one instruction and returns the number of cycles taken.
+// DebugPCHook, when non-nil, is called at the top of every Step with
+// the current PC, before fetch and interrupt handling. Debug/trace
+// instrumentation only: nil (the default) costs one branch. Used by
+// zenzx's trace harness for instruction-level cross-emulator diffing.
+var DebugPCHook func(pc uint16)
+
+// DebugMemWriteHook, when non-nil, is called on every memory write with
+// the address and both the old and new byte values, before the write
+// lands. Reading the old value costs one extra memory read per write
+// while the hook is set; nil (the default) costs one branch. The old
+// value is read via the same path the write will take (FastMem or the
+// Memory interface), so side-effecting Read implementations should not
+// be paired with this hook.
+var DebugMemWriteHook func(addr uint16, old, new uint8)
+
+// DebugIOInHook, when non-nil, is called on every port read with the
+// port and the value about to be returned to the program -- after all
+// device dispatch, so it sees exactly what the guest sees. Debug/trace
+// instrumentation only; nil (the default) costs one branch.
+var DebugIOInHook func(port uint16, val uint8)
+
 func (z *Z80) Step() int {
+	if DebugPCHook != nil {
+		DebugPCHook(z.PC)
+	}
 	z.accessOffset = 0
 	z.instrReadIndex = 0
 	z.prefixPending = false
@@ -255,8 +279,12 @@ func (z *Z80) Step() int {
 		return z.finishStep(cycles)
 	}
 
-	// If halted, just count cycles
+	// If halted, the CPU continuously executes NOP M1 cycles: R
+	// increments once per 4 T-states, exactly as on real hardware.
+	// (Previously R was frozen during HALT; Speedlock's keystream
+	// reads R after HALT-based frame syncs and detects the freeze.)
 	if z.Halted {
+		z.R = (z.R & 0x80) | ((z.R + 1) & 0x7F)
 		return z.finishStep(4)
 	}
 
@@ -458,6 +486,15 @@ func (z *Z80) memWrite(addr uint16, val uint8) {
 	if z.contentionActive {
 		z.accessOffset += 3
 	}
+	if DebugMemWriteHook != nil {
+		var old uint8
+		if z.FastMem != nil {
+			old = z.FastMem[addr]
+		} else {
+			old = z.Memory.Read(addr)
+		}
+		DebugMemWriteHook(addr, old, val)
+	}
 	if z.FastMem != nil {
 		z.FastMem[addr] = val
 		return
@@ -474,15 +511,22 @@ func (z *Z80) ioIn(port uint16) uint8 {
 	if z.contentionActive {
 		z.accessOffset += 4
 	}
-	if z.FastPort != nil {
+	var val uint8
+	switch {
+	case z.FastPort != nil:
+		val = z.FastPort[port]
 		if z.FastPortReadIn != nil {
 			if v, ok := z.FastPortReadIn(port); ok {
-				return v
+				val = v
 			}
 		}
-		return z.FastPort[port]
+	default:
+		val = z.IO.In(port)
 	}
-	return z.IO.In(port)
+	if DebugIOInHook != nil {
+		DebugIOInHook(port, val)
+	}
+	return val
 }
 
 func (z *Z80) ioOut(port uint16, val uint8) {

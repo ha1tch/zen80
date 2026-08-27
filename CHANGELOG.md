@@ -4,6 +4,43 @@ All notable changes to zen80 are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-08-26
+
+### Added
+
+- **Permanent debug hooks** for trace instrumentation: `DebugPCHook`
+  (top of every Step, pre-fetch), `DebugMemWriteHook` (every memory
+  write, with old and new values), and `DebugIOInHook` (every port
+  read, with the value returned to the guest). All package-level, nil
+  by default at one branch of cost; the write hook adds one read per
+  write while set. Replaces the add-and-strip diagnostic-patch cycle
+  the cross-emulator tracing campaigns previously required.
+
+### Fixed
+
+- **`BIT n,(HL)` no longer refreshes WZ (MEMPTR)**: the undocumented
+  X/Y result flags for this instruction take their value from
+  MEMPTR's *inherited* high byte -- the residue left by earlier
+  instructions -- not from HL. A previous fix, aimed at making those
+  flags non-arbitrary, set `WZ = HL+1` before reading them; that made
+  the flags a function of HL instead of history, which is not what
+  real hardware does. (DDCB/FDCB indexed forms are unaffected --
+  those correctly set `WZ = IX/IY+d`.)
+- **HALT now advances R every M-cycle**: previously R was frozen for
+  the duration of a HALT, undercounting refresh by one increment per
+  4 T-states of halted time. A halted Z80 continuously executes NOP
+  M1 fetches on real hardware, each incrementing R exactly as any
+  other M1 cycle would.
+- **`JP cc,nn` and `CALL cc,nn` now set WZ from the operand even when
+  the condition is not met**: on real hardware WZ (MEMPTR) is a side
+  effect of the 16-bit operand fetch itself, not of the branch being
+  taken. Both instructions previously left WZ stale on their
+  not-taken path.
+
+All three were found auditing undocumented-flag and refresh-timer
+behaviour against protection code (Speedlock-class TZX loaders) that
+deliberately probes them; each is covered by a dedicated test.
+
 ## [0.5.0] - 2026-08-25
 
 ### Added
