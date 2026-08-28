@@ -21,8 +21,8 @@ import (
 )
 
 // ---- adjust these paths to your build outputs ----
-const binPath = "/home/claude/oakhollow/build/oakhollow.bin"
-const symPath = "/home/claude/oakhollow/build/oakhollow.sym"
+const binPath = "oakhollow.bin"
+const symPath = "oakhollow.sym"
 
 // ---- settable keyboard matrix IO (inject key presses) ----
 type KbIO struct{ kb [8]uint8 }
@@ -136,7 +136,7 @@ func main() {
 	for i := 0; i < 25; i++ {
 		step1()
 	}
-	render(mem, "/home/claude/oakhollow/docs/screenshot_oakhollow.png")
+	render(mem, "screenshot_oakhollow.png")
 	fmt.Println("rendered screenshot. kn_x =", mem.Read(sym("kn_x")), " map =", mem.Read(sym("cur_map")))
 
 	// --- example: drive the knight east into the next location ---

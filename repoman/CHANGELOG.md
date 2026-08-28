@@ -3,8 +3,7 @@
 ## [0.8.0] - 2026-08-21
 
 - **New: `gomod.py`, a go.mod/go.sum sanity gate for Go projects.**
-  Built after a real incident: a different project's team hit hardcoded
-  Claude-sandbox paths that had reached a committed go.mod via a
+  Built after a real incident: a different project's team hit hardcoded paths that had reached a committed go.mod via a
   `replace` directive, while trying to get the project running
   themselves. Two checks:
   - **`replace` directive sanity** (always enforced, fully offline,
