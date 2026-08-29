@@ -7,5 +7,5 @@ Z80_ZEX_SILENT_LIMIT=150000000000000 \
 Z80_ZEX_TAIL_LINES=4 \
 Z80_ZEX_TAIL_MAX_BYTES=4096 \
 Z80_ZEX_OUTPUT=zexdoc.out \
-go test -v ./z80 -run '^TestZEX_CPMSim_BDOS_PCTrap$' -timeout=0
+go test -v ./tools/zex -run '^TestZEX_CPMSim_BDOS_PCTrap$' -timeout=0
 

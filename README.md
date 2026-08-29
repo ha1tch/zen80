@@ -233,13 +233,14 @@ go test ./z80 -run '^TestDAA_AfterAdd_LowerNibbleOverflow$' -v
 # a related group (prefix match)
 go test ./z80 -run '^TestDAA' -v
 
-# everything except the slow exercisers
-go test ./z80 -run '^Test' -skip 'ZEX|ZEXALL'
+# the whole package, fast
+go test ./z80
 ```
 
-`go test ./z80` with no `-run` will also pick up the ZEXDOC/ZEXALL exercisers
-(they default to billions of steps), so always pair a bare package run with
-`-skip 'ZEX|ZEXALL'` unless you mean to run them.
+ZEXDOC/ZEXALL live in `tools/zex`, not `z80`, specifically so a bare `go
+test ./z80` (or `go test ./...` from the repo root) never discovers or
+compiles them -- not merely skips them at runtime. Run them via
+`./zexdoc.sh`/`./zexall.sh`, or `go test ./tools/zex -run <name>` directly.
 
 ## Future Enhancements
 

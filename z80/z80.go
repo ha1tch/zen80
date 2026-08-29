@@ -260,6 +260,24 @@ var DebugMemWriteHook func(addr uint16, old, new uint8)
 // instrumentation only; nil (the default) costs one branch.
 var DebugIOInHook func(port uint16, val uint8)
 
+// DebugIOOutHook, when non-nil, is called on every port write with the
+// port and the value being written, before dispatch to the device (the
+// FastPort or IO.Out path). Unlike DebugIOInHook, the value is already
+// fully known from the CPU side before dispatch, so there is no reason
+// to wait until after it -- one call site, not two. Debug/trace
+// instrumentation only; nil (the default) costs one branch.
+var DebugIOOutHook func(port uint16, val uint8)
+
+// DebugMemReadHook, when non-nil, is called on every memory read with
+// the address and the value read, after the read completes. Fires for
+// both opcode-fetch reads and ordinary operand/data reads -- memRead is
+// shared by both, and instrReadIndex distinguishes them internally but
+// this hook does not surface that distinction; a consumer wanting only
+// data reads must cross-reference against DebugPCHook/M1Hook step
+// boundaries itself. Debug/trace instrumentation only: nil (the
+// default) costs one branch.
+var DebugMemReadHook func(addr uint16, val uint8)
+
 func (z *Z80) Step() int {
 	if DebugPCHook != nil {
 		DebugPCHook(z.PC)
@@ -474,6 +492,9 @@ func (z *Z80) memRead(addr uint16) uint8 {
 		z.instrReadIndex++
 		z.accessOffset += base
 	}
+	if DebugMemReadHook != nil {
+		DebugMemReadHook(addr, val)
+	}
 	return val
 }
 
@@ -537,6 +558,9 @@ func (z *Z80) ioOut(port uint16, val uint8) {
 	}
 	if z.contentionActive {
 		z.accessOffset += 4
+	}
+	if DebugIOOutHook != nil {
+		DebugIOOutHook(port, val)
 	}
 	if z.FastPort != nil {
 		z.FastPort[port] = val

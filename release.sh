@@ -84,9 +84,9 @@ ok "Build clean"
 # 5. Single test pass
 # Scope: ./z80/... and ./pkg/... -- cmd/ and system/ have no unit tests.
 #
-# The ZEXDOC/ZEXALL CP/M instruction exercisers run as part of this pass.
-# They are long-running but pass on a normal local machine; for the faster,
-# bounded local runs with full console streaming, use zexdoc.sh / zexall.sh.
+# The ZEXDOC/ZEXALL CP/M instruction exercisers live in tools/zex, outside
+# this scope, so they do not run as part of this pass -- use zexdoc.sh /
+# zexall.sh for those, deliberately, locally.
 step "Running tests (single pass)"
 TEST_JSON="test-output.json"
 COVER_OUT="cover.out"

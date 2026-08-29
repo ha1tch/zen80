@@ -4,6 +4,68 @@ All notable changes to zen80 are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.5] - 2026-08-28
+
+### Changed
+
+- **ZEXDOC/ZEXALL moved out of package z80, into `tools/zex`** (new
+  package `zex`). They were already excluded from the default suite at
+  runtime (`runtest.sh`'s `-skip "ZEX|ZEXALL"`), but a bare `go test
+  ./z80` or `go test ./...` still discovered and compiled them -- this
+  moves them out of that scope entirely, not just out of the run. Both
+  test files carried over unchanged (env-driven config, the reflection-
+  based register shim, the ANSI console colorizer); `ram64`/`dummyIO`
+  duplicated locally (they were unexported package-z80 test doubles,
+  not worth exporting just for this) and `New` calls qualified as
+  `z80.New`. `getenvInt`, previously provided incidentally to
+  `opcov_runtime_rom_test.go` by the now-moved `zexdoc_test.go`, given
+  its own small file (`z80/env_helpers_test.go`) so neither package
+  depends on the other.
+- `zexdoc.sh`/`zexall.sh` now target `./tools/zex`. `runtest.sh`'s
+  `-skip`/`--zex` machinery removed -- it's structurally unreachable
+  from `./z80` now, nothing left to skip. `release.sh`'s test-scope
+  comment corrected (it previously said ZEXDOC/ZEXALL "run as part of
+  this pass," which the pass's own `./z80/... ./pkg/...` scope already
+  made false even before this move). README's testing section updated
+  to match.
+
+## [0.5.4] - 2026-08-28
+
+### Added
+
+- **`DebugMemReadHook` and `DebugIOOutHook`**, completing the read/write
+  pair for both memory and I/O alongside the three hooks 0.5.1 added
+  (`DebugPCHook`, `DebugMemWriteHook`, `DebugIOInHook`). Same cost
+  model: package-level, nil by default at one branch of cost.
+  `DebugMemReadHook(addr, val)` fires in `memRead` for every read,
+  opcode fetches included (it does not distinguish fetch from operand
+  reads -- see its doc comment). `DebugIOOutHook(port, val)` fires once
+  in `ioOut`, before dispatch to the device -- unlike `DebugIOInHook`,
+  the value is already known from the CPU side, so there is no "after
+  dispatch" to wait for. Requested by zenzx
+  (`docs/proposals/zen80-tracing-hooks.md` in that repo) to close the
+  memory-read and port-write gaps in its trace harness; the interrupt-
+  tracing gap that request also raised turned out to already be covered
+  by the existing `M1Hook`/`DEBUG_M1` mechanism, which zenzx's harness
+  had simply never wired up. Both new hooks covered by dedicated tests
+  (`z80/debug_hooks_test.go`) verifying they fire with correct
+  addr/port/val, that the underlying read/write still happens with the
+  hook nil, and (for reads) that a two-byte instruction produces
+  exactly the two reads expected.
+
+### Fixed
+
+- **`VERSION`/`pkg/version/version.go` drift**: the file said `0.4.0`
+  while `VERSION` said `0.5.3`, and `CHANGELOG.md` had no entries for
+  either `0.5.2` or `0.5.3` -- both pre-existing, found while preparing
+  this release, not introduced by it. `pkg/version/version.go` is now
+  back in sync via `syncver.sh set`. The missing `0.5.2`/`0.5.3` log
+  entries are not reconstructed here (their commit messages -- "Fixed
+  repo handling errors", "Fixed some more repo handling errors" -- do
+  not carry enough detail to write an honest entry after the fact) --
+  flagged for whoever tagged those versions to backfill if the detail
+  is still known.
+
 ## [0.5.1] - 2026-08-26
 
 ### Added
