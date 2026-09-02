@@ -166,9 +166,10 @@ if $CUT_ZIP; then
     # them because they are not ELF/Mach-O/PE.
     ZIP_SOURCES=(
         README.md CHANGELOG.md ROADMAP.md COVERAGE.md VERSION LICENSE
+        Z80N_ZESARUX_CROSSCHECK.md
         syncver.sh release.sh runtest.sh zexdoc.sh zexall.sh
         go.mod
-        z80/ memory/ io/ system/ cmd/ pkg/ rom/
+        z80/ memory/ io/ system/ cmd/ pkg/ rom/ tools/
     )
     # go.sum is optional -- include only if present.
     [ -f go.sum ] && ZIP_SOURCES+=(go.sum)

@@ -1,4 +1,4 @@
-package z80
+package zex
 
 import (
 	"bytes"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ha1tch/zen80/z80"
 )
 
 // ANSI colors
@@ -369,15 +371,15 @@ func lastLines(delta []byte, tailBytes, maxLines int) string {
 // a change to core execution -- not as a routine check, and not something
 // a CI run or `go test ./...` should ever be expected to complete.
 func TestZEX_CPMSim_BDOS_PCTrap(t *testing.T) {
-	comPath := "../rom/zexdoc.com"
+	comPath := "../../rom/zexdoc.com"
 	com, err := os.ReadFile(comPath)
 	if err != nil {
-		t.Skipf("missing zexdoc.com in ./rom")
+		t.Skipf("missing zexdoc.com in ../../rom")
 	}
 
 	mem := &ram64{}
 	io := &dummyIO{} // IO not used with PC-trap, but CPU needs one
-	cpu := New(mem, io)
+	cpu := z80.New(mem, io)
 	regs := asRegs(cpu)
 
 	// CP/M layout

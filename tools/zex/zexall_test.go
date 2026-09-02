@@ -1,4 +1,4 @@
-package z80
+package zex
 
 import (
 	"bytes"
@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ha1tch/zen80/z80"
 )
 
 // TestZEXALL_CPMSim_BDOS_PCTrap runs the ZEXALL test suite -- ALL flags,
@@ -20,16 +22,16 @@ import (
 // ever be expected to complete.
 func TestZEXALL_CPMSim_BDOS_PCTrap(t *testing.T) {
 	// Try to load zexall.com from the rom directory
-	comPath := filepath.Join("..", "rom", "zexall.com")
+	comPath := filepath.Join("..", "..", "rom", "zexall.com")
 	com, err := os.ReadFile(comPath)
 	if err != nil {
-		t.Skipf("missing zexall.com in ../rom directory: %v", err)
+		t.Skipf("missing zexall.com in ../../rom directory: %v", err)
 	}
 
 	// Set up memory and I/O
 	mem := &ram64{}
 	io := &dummyIO{}
-	cpu := New(mem, io)
+	cpu := z80.New(mem, io)
 	regs := asRegs(cpu)
 
 	// Load CP/M program at 0x0100
@@ -244,7 +246,7 @@ func TestZEXALL_QuickCheck(t *testing.T) {
 	}
 
 	// Try to load zexall.com
-	comPath := filepath.Join("..", "rom", "zexall.com")
+	comPath := filepath.Join("..", "..", "rom", "zexall.com")
 	com, err := os.ReadFile(comPath)
 	if err != nil {
 		t.Skipf("missing zexall.com: %v", err)
@@ -252,7 +254,7 @@ func TestZEXALL_QuickCheck(t *testing.T) {
 
 	mem := &ram64{}
 	io := &dummyIO{}
-	cpu := New(mem, io)
+	cpu := z80.New(mem, io)
 	regs := asRegs(cpu)
 
 	// Load and set up

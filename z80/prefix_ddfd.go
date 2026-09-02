@@ -20,6 +20,15 @@ func (z *Z80) executeDD() int {
 		return z.executeED() + 4
 	case 0xFD: // FD after DD - DD is ignored
 		return z.executeFD() + 4
+	case 0xEB: // EX DE,HL - unaffected by DD, same as real hardware.
+		// Without this, opcode falls through to
+		// executeDDFDInstruction's generic substitute-IX-for-HL path,
+		// which incorrectly swaps DE with IX instead of leaving this
+		// instruction's real HL operand untouched. Confirmed via a
+		// live run: DD EB left DE holding IX's value and IX holding
+		// DE's original value, with HL (the operand EX DE,HL should
+		// have touched) left unchanged.
+		return z.execute(0xEB) + 4
 	}
 
 	// Check for undocumented IXH/IXL register access opcodes
@@ -125,6 +134,8 @@ func (z *Z80) executeFD() int {
 		return z.executeED() + 4
 	case 0xFD: // Another FD prefix - acts as NOP
 		return 4
+	case 0xEB: // EX DE,HL - unaffected by FD; see executeDD's identical case.
+		return z.execute(0xEB) + 4
 	}
 
 	// Check for undocumented IYH/IYL register access opcodes
@@ -603,6 +614,19 @@ func (z *Z80) executeDDFDCBOperation(opcode uint8, addr uint16) int {
 
 // involvesHL checks if an opcode involves the HL register
 func involvesHL(opcode uint8) bool {
+	// HALT (0x76) is unaffected by DD/FD -- real hardware executes it
+	// exactly as unprefixed HALT, prefix ignored, matching the "except
+	// 0x76" exclusion handleIXHIXL/handleIYHIYL already apply below.
+	// Without this, 0x76's y==6,z==6 fields match the generic "LD
+	// instructions involving (HL)" check further down, routing it into
+	// executeDD/executeFD's "LD (IX+d),r" branch, which calls
+	// getRegister8(6) -- reserved for (HL)/(IX+d), not a plain
+	// register -- and panics by design. Confirmed via a live crash on
+	// "DD 76": getRegister8 called with index 6 (HL).
+	if opcode == 0x76 {
+		return false
+	}
+
 	// Check for instructions that use HL or (HL)
 	x := opcode >> 6
 	y := (opcode >> 3) & 7

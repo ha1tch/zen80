@@ -4,6 +4,51 @@ All notable changes to zen80 are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.6] - 2026-09-01
+
+### Fixed
+
+- **`DD 76`/`FD 76` (`HALT` under an index prefix) panicked.** The
+  opcode's `y==6,z==6` fields matched the generic "LD instructions
+  involving (HL)" check in `involvesHL`, routing it into the
+  DD/FD "LD (IX+d),r" branch, which calls `getRegister8(6)` --
+  reserved for `(HL)`/`(IX+d)`, not a plain register -- and panics
+  by design. Real hardware executes `HALT` under either prefix
+  exactly as unprefixed `HALT`, prefix ignored. Confirmed via a live
+  crash before the fix and a live, panic-free run after, not just
+  read from the diff.
+- **`DD EB`/`FD EB` (`EX DE,HL` under an index prefix) corrupted
+  registers.** Without an explicit case, the opcode fell through to
+  the generic substitute-IX/IY-for-HL path, incorrectly swapping `DE`
+  with `IX`/`IY` instead of leaving `EX DE,HL`'s real operands
+  untouched -- confirmed via a live run showing `DE` left holding
+  `IX`'s value and `IX` holding `DE`'s original value, `HL` (the
+  operand that should have been touched) left unchanged. Real
+  hardware treats this opcode as unaffected by either prefix.
+  Verified after the fix with a direct register check: `DE`/`HL`
+  swap exactly as unprefixed `EX DE,HL`, `IX`/`IY` untouched.
+
+### Changed
+
+- **ZEXDOC/ZEXALL actually moved out of package `z80`, into
+  `tools/zex`** (new package `zex`) -- completing work the `0.5.5`
+  entry above already described, which did not in fact make it into
+  that tag (the published `v0.5.5` git hash still has both test files
+  in `z80/`; this was caught while preparing this release, not
+  silently corrected in place, since a published tag's own history
+  shouldn't be rewritten after the fact). The move itself is as
+  originally described: both test files carried over unchanged
+  (env-driven config, the reflection-based register shim, the ANSI
+  console colorizer); `ram64`/`dummyIO` duplicated locally (unexported
+  package-`z80` test doubles, not worth exporting just for this) and
+  `New` calls qualified as `z80.New`. `getenvInt`, previously provided
+  incidentally to `opcov_runtime_rom_test.go` by the now-moved
+  `zexdoc_test.go`, given its own small file
+  (`z80/env_helpers_test.go`).
+- `zexdoc.sh`/`zexall.sh` now target `./tools/zex`. `runtest.sh`'s
+  `-skip`/`--zex` machinery removed. `release.sh`'s test-scope comment
+  corrected. README's testing section updated to match.
+
 ## [0.5.5] - 2026-08-28
 
 ### Changed

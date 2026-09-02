@@ -1,4 +1,4 @@
-package z80
+package zex
 
 // ram64 is a minimal flat 64K memory used by tests (e.g., ZEX).
 type ram64 struct{ data [65536]byte }
