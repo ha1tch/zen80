@@ -105,6 +105,31 @@ type Z80 struct {
 	// always a complete no-op.
 	FastPortWriteOut func(port uint16, value uint8)
 
+	// NextregWrite is a further optional addition alongside FastPort:
+	// checked first by the Z80N NEXTREG opcode (ED 91 / ED 92), before it
+	// falls back to the two-OUT sequence (select port 0x243B, data port
+	// 0x253B). Exists because on real ZX Spectrum Next hardware NEXTREG
+	// is NOT the same operation as those two OUT instructions in sequence
+	// -- it writes the named register directly into the Next register
+	// file and leaves whatever register was previously selected via port
+	// 0x243B completely untouched. Routing the opcode through the port
+	// pair instead (the prior behaviour here, and a real, previously-
+	// shipped bug in the jnext emulator -- see its port_dispatch.h
+	// nextreg_opcode_write_cb comment and GH #54/RevivalSurvival.nex)
+	// clobbers that selected-register latch: a caller that selects a
+	// register once via 0x243B and then polls it via repeated IN
+	// A,(0x253B) -- a common raster-wait idiom -- has its read
+	// permanently redirected the moment any NEXTREG executes, e.g. from
+	// an interrupt handler.
+	//
+	// Signature intentionally mirrors IOInterface.Out (reg, value), not
+	// FastPortWriteOuts (port, value), since a NEXTREG write has no
+	// port of its own to report -- the caller receives exactly the
+	// register/value pair the opcode decoded. nil (the default) falls
+	// back to the previous two-OUT-calls behaviour, so any caller not
+	// yet updated to use this hook is unaffected byte-for-byte.
+	NextregWrite func(reg uint8, value uint8)
+
 	// ContendedMemDelay is an optional hook: called on every memory
 	// read and write with the address and the access's estimated
 	// T-state position: the CPU's cycle count at the start of the

@@ -471,6 +471,73 @@ func TestZ80N_NextregA(t *testing.T) {
 	assertEq(t, c, 17, "NEXTREG $im8,A cycles")
 }
 
+// TestZ80N_NextregNN_UsesHookNotPorts is the regression for the real,
+// previously-shipped jnext bug (GH #54): when a caller wires
+// NextregWrite, NEXTREG must go through it directly and must NOT touch
+// ports 0x243B/0x253B at all -- in particular it must leave whatever
+// register was previously selected via 0x243B untouched. The prior
+// two-OUT-calls-only implementation could not pass this; that was the
+// design error T-27's jnext comparison found.
+func TestZ80N_NextregNN_UsesHookNotPorts(t *testing.T) {
+	cpu, mem, io := testCPU()
+	cpu.Z80N = true
+	var gotReg, gotVal uint8
+	var hookCalls int
+	cpu.NextregWrite = func(reg, value uint8) {
+		hookCalls++
+		gotReg, gotVal = reg, value
+	}
+	// Pre-seed port 0x243B as if some earlier OUT had selected register
+	// 0x24 -- NEXTREG must not disturb this.
+	io.lastOut[0x243B] = 0x24
+	loadProgram(cpu, mem, 0, 0xED, 0x91, 0x07, 0x99)
+	c := mustStep(t, cpu)
+	assertEq(t, hookCalls, 1, "NEXTREG calls NextregWrite exactly once")
+	assertEq(t, gotReg, uint8(0x07), "NextregWrite receives the target register")
+	assertEq(t, gotVal, uint8(0x99), "NextregWrite receives the value")
+	assertEq(t, c, 20, "NEXTREG $im8,$im8 cycles unchanged")
+	_, sawSelectWrite := io.lastOut[0x243B]
+	assertEq(t, sawSelectWrite, true, "port 0x243B still holds its pre-existing value")
+	assertEq(t, io.lastOut[0x243B], uint8(0x24),
+		"NEXTREG via the hook must NOT overwrite the port-0x243B selected register")
+	_, sawDataWrite := io.lastOut[0x253B]
+	assertEq(t, sawDataWrite, false, "NEXTREG via the hook must NOT touch port 0x253B either")
+}
+
+// TestZ80N_NextregA_UsesHookNotPorts is NextregNN's sibling for ED 92.
+func TestZ80N_NextregA_UsesHookNotPorts(t *testing.T) {
+	cpu, mem, io := testCPU()
+	cpu.Z80N = true
+	cpu.A = 0x42
+	var gotReg, gotVal uint8
+	cpu.NextregWrite = func(reg, value uint8) { gotReg, gotVal = reg, value }
+	io.lastOut[0x243B] = 0x24
+	loadProgram(cpu, mem, 0, 0xED, 0x92, 0x15)
+	c := mustStep(t, cpu)
+	assertEq(t, gotReg, uint8(0x15), "NextregWrite receives the target register")
+	assertEq(t, gotVal, uint8(0x42), "NextregWrite receives A's value")
+	assertEq(t, c, 17, "NEXTREG $im8,A cycles unchanged")
+	assertEq(t, io.lastOut[0x243B], uint8(0x24),
+		"NEXTREG via the hook must NOT overwrite the port-0x243B selected register")
+}
+
+// TestZ80N_NextregNN_FallbackClobbersSelect documents, as a known
+// limitation rather than a silent gap, that the PORT-PAIR FALLBACK PATH
+// (no NextregWrite hook wired) reproduces the same non-hardware-faithful
+// behaviour jnext shipped and later fixed: it clobbers whatever register
+// was previously selected via port 0x243B. A caller that cares about this
+// distinction (any full Next emulator, per the jnext GH #54 history) must
+// wire NextregWrite -- see its doc comment in z80.go.
+func TestZ80N_NextregNN_FallbackClobbersSelect(t *testing.T) {
+	cpu, mem, io := testCPU()
+	cpu.Z80N = true
+	io.lastOut[0x243B] = 0x24
+	loadProgram(cpu, mem, 0, 0xED, 0x91, 0x07, 0x99)
+	mustStep(t, cpu)
+	assertEq(t, io.lastOut[0x243B], uint8(0x07),
+		"known limitation: the no-hook fallback overwrites the previously-selected register")
+}
+
 // TestZ80N_JpC checks the documented formula directly: PC := (PC & $C000)
 // | (IN(C) << 6), where "current PC" is the address immediately after
 // this instruction's own two opcode bytes. Starting the code at 0x8000

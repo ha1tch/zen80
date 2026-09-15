@@ -233,19 +233,29 @@ func (z *Z80) z80nOutinb() int {
 }
 
 // nextRegSelectPort and nextRegDataPort are the two I/O ports NEXTREG's
-// register-select-then-write behaviour is built from -- confirmed against
-// multiple independent sources (the tbblue project's own port/register
-// docs, the SpecNext wiki's Board_feature_control page, and the
-// ZXSpectrumNextTests reference suite), not just carried over from an
-// earlier, unverified guess: 0x243B selects which Next register is being
-// addressed, 0x253B reads or writes that register's value. Real hardware
-// implements NEXTREG as a direct internal register write, bypassing the
-// port mechanism entirely -- but the *observable effect* on a running
-// program is exactly the same as those two OUT instructions in sequence,
-// and this emulator has no separate "internal Next register" write path
-// of its own outside the IOInterface abstraction, so implementing NEXTREG
-// as literally those two OUT calls is the correct, and only sensible,
-// choice here.
+// register-select-then-write behaviour is built from when no NextregWrite
+// hook is wired -- confirmed against multiple independent sources (the
+// tbblue project's own port/register docs, the SpecNext wiki's
+// Board_feature_control page, and the ZXSpectrumNextTests reference
+// suite): 0x243B selects which Next register is being addressed, 0x253B
+// reads or writes that register's value.
+//
+// CORRECTION (previously this comment argued the two-OUT-calls path was
+// "correct, and the only sensible choice" on the grounds that real
+// hardware's direct-register-write behaviour is observably identical to
+// those two OUTs -- that reasoning was wrong). Real hardware implements
+// NEXTREG as a direct internal register-file write that bypasses the
+// port-0x243B select latch entirely, and the two are NOT observably
+// equivalent: the direct write leaves the previously-selected register
+// untouched, while routing through the port pair overwrites it as a side
+// effect. jnext (github.com/jorgegv/jnext) shipped exactly this bug and
+// then fixed it (GH #54, RevivalSurvival.nex permanently hung its own
+// raster-wait loop the moment the game's interrupt handler executed any
+// NEXTREG), which is the concrete evidence this comment previously
+// lacked. See NextregWrite's doc comment in z80.go for the hook that lets
+// a caller (e.g. zenzx) give NEXTREG its own direct write path instead.
+// This two-OUT-calls path remains as the default fallback only, for a
+// caller with no such path of its own to write into.
 const (
 	nextRegSelectPort = 0x243B
 	nextRegDataPort   = 0x253B
@@ -256,16 +266,29 @@ const (
 func (z *Z80) z80nNextregNN() int {
 	reg := z.fetchByte()
 	value := z.fetchByte()
-	z.ioOut(nextRegSelectPort, reg)
-	z.ioOut(nextRegDataPort, value)
+	if z.NextregWrite != nil {
+		z.NextregWrite(reg, value)
+	} else {
+		// Fallback for a caller with no NextregWrite hook wired: not
+		// hardware-faithful (this clobbers the port-0x243B selected
+		// register -- see the NextregWrite field doc comment), but keeps
+		// prior behaviour byte-for-byte for anyone not yet updated.
+		z.ioOut(nextRegSelectPort, reg)
+		z.ioOut(nextRegDataPort, value)
+	}
 	return 20
 }
 
 // NEXTREG $im8,A ED 92 -- select a Next register and write A to it.
 func (z *Z80) z80nNextregA() int {
 	reg := z.fetchByte()
-	z.ioOut(nextRegSelectPort, reg)
-	z.ioOut(nextRegDataPort, z.A)
+	if z.NextregWrite != nil {
+		z.NextregWrite(reg, z.A)
+	} else {
+		// Fallback -- see the NextregWrite field doc comment in z80.go.
+		z.ioOut(nextRegSelectPort, reg)
+		z.ioOut(nextRegDataPort, z.A)
+	}
 	return 17
 }
 

@@ -4,7 +4,28 @@ All notable changes to zen80 are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.5.6] - 2026-09-01
+## [0.5.7] - 2026-09-15
+
+### Fixed
+
+- **Z80N `NEXTREG` (`ED 91`/`ED 92`) clobbered the port-0x243B
+  selected-register latch.** Both opcodes were implemented as two
+  sequential `ioOut()` calls -- select then data -- identical to a
+  raw port `OUT`. Real Next hardware writes the opcode's target
+  register directly into the register file and never touches the
+  0x243B select latch; a caller that selects a register once and
+  then polls it via repeated `IN A,(0x253B)` (a common raster-wait
+  idiom) had that read permanently redirected the moment any
+  `NEXTREG` executed, e.g. from an interrupt handler. This is a
+  real, previously-shipped bug in the jnext emulator (GH #54,
+  RevivalSurvival.nex), found by comparing zen80/zenzx's behaviour
+  against jnext's VHDL-cited source and bug history. Added
+  `Z80.NextregWrite`, a new optional hook (mirrors the existing
+  `FastPortWriteOut` pattern) checked first by both opcodes; when
+  unset, the previous two-`ioOut`-calls behaviour is used unchanged,
+  so any caller not yet updated is unaffected byte-for-byte. A
+  caller that wires `NextregWrite` gets a NEXTREG write that never
+  touches the select latch, matching real hardware.
 
 ### Fixed
 
